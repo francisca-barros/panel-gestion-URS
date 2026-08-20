@@ -498,7 +498,10 @@ function RegionPanel({ data }) {
 
 // ---------- Cliente mínimo vía fetch (sin librería externa) ----------
 function makeSupabaseFetcher(url, key) {
-  const base = url.replace(/\/$/, "");
+  // Normaliza la URL: acepta tanto "https://xxx.supabase.co" como
+  // "https://xxx.supabase.co/rest/v1" (con o sin barra final) — evita el error
+  // "Invalid path specified" por duplicar /rest/v1 si el usuario ya lo incluyó.
+  const base = url.trim().replace(/\/+$/, "").replace(/\/rest\/v1$/i, "");
   return async function fetchTable(table) {
     const res = await fetch(`${base}/rest/v1/${table}?select=*`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
@@ -548,7 +551,9 @@ function useRegionsFromSupabase(fetcher, enabled) {
         if (warns.length) setWarnings(warns);
 
         const [regData, comData, indData, deudaData, cartData] = clean;
-        if (!regData.length) throw new Error("La tabla 'regiones' está vacía o no se pudo leer — sin esto no hay nada que mostrar.");
+        const regRaw = results[0];
+        if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
+        if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
 
         const out = {};
         for (const r of regData) {

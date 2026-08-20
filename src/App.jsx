@@ -418,25 +418,46 @@ function RegionPanel({ data }) {
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
                   Fuente: Estado de Ejecución del Gasto — Comisiones de Servicio, período {data.s6.periodo}.
                 </div>
-                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
-                  <div style={{ flex: 1, minWidth: 180, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
-                    <div style={{ fontSize: 11, color: "#666" }}>Total equipo URS</div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoTotal / 1000)}M</div>
-                    <div style={{ fontSize: 12, color: "#666" }}>{data.s6.nViaticos} viáticos</div>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
+                    <div style={{ fontSize: 11, color: "#666" }}>Presupuesto vigente</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{fmtM((data.s6.presupuestoVigente || 0) / 1000)}M</div>
                   </div>
-                  {data.s6.montoJefe ? (
-                    <div style={{ flex: 1, minWidth: 180, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
-                      <div style={{ fontSize: 11, color: "#666" }}>Jefe/a URS ({data.s6.nombreJefeFuente})</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoJefe / 1000)}M</div>
-                      <div style={{ fontSize: 12, color: "#666" }}>{data.s6.nViaticosJefe} viáticos</div>
-                    </div>
-                  ) : (
-                    <div style={{ flex: 1, minWidth: 180, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14, color: "#999", fontSize: 12 }}>
-                      El/la jefe/a URS no aparece individualizado/a en el reporte (solo top 10 nacional) — no se puede separar su gasto del resto del equipo con esta fuente.
-                    </div>
-                  )}
+                  <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
+                    <div style={{ fontSize: 11, color: "#666" }}>Ejecutado a la fecha</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoTotal / 1000)}M</div>
+                    <div style={{ fontSize: 11, color: "#666" }}>{data.s6.nViaticos} viáticos</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
+                    <div style={{ fontSize: 11, color: "#666" }}>% ejecución regional</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: pctColor(data.s6.pctEjecucionRegional) }}>{data.s6.pctEjecucionRegional?.toFixed(2)}%</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
+                    <div style={{ fontSize: 11, color: "#666" }}>Disponible</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: GREEN_TXT }}>{fmtM((data.s6.presupuestoDisponible || 0) / 1000)}M</div>
+                  </div>
                 </div>
-                <Pending text="Este reporte no separa jefe/a vs. resto del equipo salvo para quienes están en el top 10 nacional de gasto — no es una fuente completa de desglose individual." />
+
+                {data.s6mensual && data.s6mensual.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Ejecución por período (2026)</div>
+                    <Table headers={["Período", "Monto ejecutado ($M)"]}
+                      rows={data.s6mensual.map(m => [m.periodo, fmtM(m.monto / 1000)])} />
+                  </div>
+                )}
+
+                {data.s6funcionarios && data.s6funcionarios.length > 0 ? (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Detalle por funcionario (quienes aparecen en el top 10 nacional URS)</div>
+                    <Table headers={["Funcionario", "Monto ($M)", "N° viáticos", "Rol"]}
+                      rows={data.s6funcionarios.map(f => [f.nombre, fmtM(f.monto / 1000), f.n, f.esJefe ? <Pill tone="good">Jefe/a URS</Pill> : "Equipo"])} />
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>
+                    Nadie de esta región aparece individualizado en el top 10 nacional del reporte — solo se dispone del monto agregado del equipo completo.
+                  </div>
+                )}
+                <Pending text="El reporte fuente solo individualiza al top 10 nacional de gasto — el resto del equipo queda dentro del monto agregado, sin desglose por persona." />
               </div>
             ) : <Pending text="Sin fuente automatizada para esta región." />}
           </div>
@@ -568,6 +589,8 @@ function useRegionsFromSupabase(fetcher, enabled) {
           safeFetch("deuda_flotante"),
           safeFetch("capacidad_cartera"),
           safeFetch("viaticos"),
+          safeFetch("viaticos_mensual"),
+          safeFetch("viaticos_funcionario"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -576,7 +599,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -612,8 +635,10 @@ function useRegionsFromSupabase(fetcher, enabled) {
             })(),
             s6: (() => {
               const v = viatData.find(x => x.region_id === r.id);
-              return v ? { periodo: v.periodo, montoTotal: v.monto_total, nViaticos: v.n_viaticos, montoJefe: v.monto_jefe, nViaticosJefe: v.n_viaticos_jefe, nombreJefeFuente: v.nombre_jefe_fuente } : null;
+              return v ? { periodo: v.periodo, montoTotal: v.monto_total, nViaticos: v.n_viaticos, montoJefe: v.monto_jefe, nViaticosJefe: v.n_viaticos_jefe, nombreJefeFuente: v.nombre_jefe_fuente, presupuestoVigente: v.presupuesto_vigente, presupuestoDisponible: v.presupuesto_disponible, pctEjecucionRegional: v.pct_ejecucion_regional, pctEjecucionInstitucional: v.pct_ejecucion_institucional } : null;
             })(),
+            s6mensual: viatMensualData.filter(m => m.region_id === r.id).sort((a, b) => a.orden_periodo - b.orden_periodo).map(m => ({ periodo: m.periodo, monto: m.monto_ejecutado })),
+            s6funcionarios: viatFuncData.filter(f => f.region_id === r.id).sort((a, b) => b.monto - a.monto).map(f => ({ nombre: f.funcionario, monto: f.monto, n: f.n_viaticos, esJefe: f.es_jefe })),
             s10: null,
             s11: null,
           };

@@ -238,19 +238,33 @@ function EvalRow({ label, meta, real }) {
   );
 }
 
+function DeltaBadge({ curr, prev }) {
+  if (prev === null || prev === undefined) return <span style={{ fontSize: 11, color: "#999" }}>sin corte anterior</span>;
+  const diff = curr - prev;
+  if (Math.abs(diff) < 0.05) return <span style={{ fontSize: 11, color: "#888" }}>≈ igual que el mes pasado</span>;
+  const faster = diff < 0; // menos días = más rápido
+  return (
+    <span style={{ fontSize: 11, fontWeight: 700, color: faster ? GREEN_TXT : RED }}>
+      {faster ? "▼" : "▲"} {Math.abs(diff).toFixed(1)}d {faster ? "más rápido" : "más lento"} vs. mes pasado ({prev.toFixed(1)}d)
+    </span>
+  );
+}
+
 function RendCard({ label, data }) {
   const okT = data.realT <= data.metaT, okF = data.realF <= data.metaF;
   return (
-    <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14, flex: 1, minWidth: 220 }}>
+    <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14, flex: 1, minWidth: 240 }}>
       <div style={{ fontWeight: 700, color: NAVY, marginBottom: 10, fontSize: 14 }}>{label}</div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4, color: "#666" }}>
         <span>Técnica</span><span>Meta {data.metaT.toFixed(1)}d</span>
       </div>
-      <div style={{ fontSize: 20, fontWeight: 800, color: okT ? GREEN_TXT : RED, marginBottom: 10 }}>{data.realT.toFixed(1)} días</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: okT ? GREEN_TXT : RED }}>{data.realT.toFixed(1)} días</div>
+      <div style={{ marginBottom: 10 }}><DeltaBadge curr={data.realT} prev={data.prevRealT} /></div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4, color: "#666" }}>
         <span>Financiera</span><span>Meta {data.metaF.toFixed(1)}d</span>
       </div>
       <div style={{ fontSize: 20, fontWeight: 800, color: okF ? GREEN_TXT : RED }}>{data.realF.toFixed(1)} días</div>
+      <div><DeltaBadge curr={data.realF} prev={data.prevRealF} /></div>
     </div>
   );
 }
@@ -272,7 +286,141 @@ function DonutMini({ cerrados, enEjecucion, otros, total }) {
   );
 }
 
-function RegionPanel({ data }) {
+function AcuerdosEditor({ regionId, rows, fetcher, onChanged }) {
+  const [form, setForm] = useState({ descripcion: "", responsable: "", plazo: "", estado: "Pendiente" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function addRow() {
+    if (!form.descripcion.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      await fetcher.insertRow("acuerdos_compromisos", { region_id: regionId, descripcion: form.descripcion, responsable: form.responsable || null, plazo: form.plazo || null, estado: form.estado });
+      setForm({ descripcion: "", responsable: "", plazo: "", estado: "Pendiente" });
+      onChanged();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function updateField(id, field, value) {
+    try { await fetcher.updateRow("acuerdos_compromisos", id, { [field]: value, updated_at: new Date().toISOString() }); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+  async function removeRow(id) {
+    try { await fetcher.deleteRow("acuerdos_compromisos", id); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  const estadoTone = { Pendiente: "neutral", "En curso": "warn", Cumplido: "good", Atrasado: "bad" };
+
+  return (
+    <div>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, overflow: "hidden" }}>
+        {rows.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#888" }}>Sin acuerdos registrados todavía.</div>}
+        {rows.map((a) => (
+          <div key={a.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 13 }}>
+            <input defaultValue={a.descripcion} onBlur={(e) => e.target.value !== a.descripcion && updateField(a.id, "descripcion", e.target.value)}
+              style={{ flex: 3, border: "1px solid transparent", padding: 4, borderRadius: 4 }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <input defaultValue={a.responsable || ""} onBlur={(e) => e.target.value !== a.responsable && updateField(a.id, "responsable", e.target.value)}
+              placeholder="Responsable" style={{ flex: 1.2, border: "1px solid transparent", padding: 4, borderRadius: 4 }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <input type="date" defaultValue={a.plazo || ""} onBlur={(e) => e.target.value !== a.plazo && updateField(a.id, "plazo", e.target.value)}
+              style={{ flex: 1, border: "1px solid transparent", padding: 4, borderRadius: 4, fontSize: 12 }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <select value={a.estado} onChange={(e) => updateField(a.id, "estado", e.target.value)} style={{ fontSize: 12, borderRadius: 4, padding: 3 }}>
+              {["Pendiente", "En curso", "Cumplido", "Atrasado"].map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button onClick={() => removeRow(a.id)} title="Eliminar" style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 14 }}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, padding: 12, background: LIGHTGRAY, borderRadius: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: NAVY_SOFT, marginBottom: 8 }}>Agregar nuevo acuerdo</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input placeholder="Descripción del compromiso" value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })}
+            style={{ flex: 3, minWidth: 200, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input placeholder="Responsable" value={form.responsable} onChange={e => setForm({ ...form, responsable: e.target.value })}
+            style={{ flex: 1.2, minWidth: 120, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input type="date" value={form.plazo} onChange={e => setForm({ ...form, plazo: e.target.value })}
+            style={{ flex: 1, minWidth: 130, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <button onClick={addRow} disabled={busy || !form.descripcion.trim()}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: busy ? LIGHTGRAY : NAVY, color: "white", fontWeight: 700, fontSize: 13, cursor: busy ? "default" : "pointer" }}>
+            {busy ? "Guardando…" : "+ Agregar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CoberturaEditor({ regionId, rows, fetcher, onChanged }) {
+  const [form, setForm] = useState({ comuna: "", fecha_visita: "", visitado_por: "", notas: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function addRow() {
+    if (!form.comuna.trim() || !form.fecha_visita) return;
+    setBusy(true); setErr(null);
+    try {
+      await fetcher.insertRow("cobertura_visitas", { region_id: regionId, comuna: form.comuna, fecha_visita: form.fecha_visita, visitado_por: form.visitado_por || null, notas: form.notas || null });
+      setForm({ comuna: "", fecha_visita: "", visitado_por: "", notas: "" });
+      onChanged();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function removeRow(id) {
+    try { await fetcher.deleteRow("cobertura_visitas", id); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  const comunasUnicas = new Set(rows.map(r => r.comuna));
+
+  return (
+    <div>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      <div style={{ display: "flex", gap: 14, marginBottom: 12 }}>
+        <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, flex: 1 }}>
+          <div style={{ fontSize: 11, color: "#666" }}>Comunas distintas visitadas</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{comunasUnicas.size}</div>
+        </div>
+        <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, flex: 1 }}>
+          <div style={{ fontSize: 11, color: "#666" }}>Visitas totales registradas</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{rows.length}</div>
+        </div>
+      </div>
+
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, overflow: "hidden" }}>
+        {rows.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#888" }}>Sin visitas registradas todavía.</div>}
+        {rows.map((v) => (
+          <div key={v.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 13 }}>
+            <span style={{ flex: 2, fontWeight: 600 }}>{v.comuna}</span>
+            <span style={{ flex: 1, color: "#666", fontSize: 12 }}>{v.fecha_visita}</span>
+            <span style={{ flex: 1.5, color: "#666", fontSize: 12 }}>{v.visitado_por || "—"}</span>
+            <span style={{ flex: 2, color: "#888", fontSize: 12 }}>{v.notas || ""}</span>
+            <button onClick={() => removeRow(v.id)} style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 14 }}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, padding: 12, background: LIGHTGRAY, borderRadius: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: NAVY_SOFT, marginBottom: 8 }}>Registrar nueva visita</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input placeholder="Comuna" value={form.comuna} onChange={e => setForm({ ...form, comuna: e.target.value })}
+            style={{ flex: 1.5, minWidth: 140, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input type="date" value={form.fecha_visita} onChange={e => setForm({ ...form, fecha_visita: e.target.value })}
+            style={{ flex: 1, minWidth: 130, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input placeholder="Visitado por (ej. Jefe/a URS)" value={form.visitado_por} onChange={e => setForm({ ...form, visitado_por: e.target.value })}
+            style={{ flex: 1.5, minWidth: 150, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input placeholder="Notas (opcional)" value={form.notas} onChange={e => setForm({ ...form, notas: e.target.value })}
+            style={{ flex: 2, minWidth: 150, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <button onClick={addRow} disabled={busy || !form.comuna.trim() || !form.fecha_visita}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: busy ? LIGHTGRAY : NAVY, color: "white", fontWeight: 700, fontSize: 13, cursor: busy ? "default" : "pointer" }}>
+            {busy ? "Guardando…" : "+ Registrar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const tabs = [
     ["resumen", "Resumen"],
@@ -398,15 +546,14 @@ function RegionPanel({ data }) {
         {tab === "s4" && (
           <div>
             <SectionTitle n="4" title="Acuerdos y compromisos" />
-            <Table headers={["Descripción del compromiso / tarea", "Responsable", "Plazo"]}
-              rows={[["1. [a formalizar en la bilateral]", "Nivel Central / URS", "DD/MM/2026"], ["2.", "Nivel Central / URS", "DD/MM/2026"]]} />
+            <AcuerdosEditor regionId={regionId} rows={data.s4data || []} fetcher={fetcher} onChanged={onDataChanged} />
           </div>
         )}
 
         {tab === "s5" && (
           <div>
             <SectionTitle n="5" title="Cobertura territorial — recorrido de comunas" />
-            <Pending text="Sin registro de comunas visitadas por la URS." />
+            <CoberturaEditor regionId={regionId} rows={data.s5data || []} fetcher={fetcher} onChanged={onDataChanged} />
           </div>
         )}
 
@@ -548,22 +695,45 @@ function makeSupabaseFetcher(url, key) {
   // "https://xxx.supabase.co/rest/v1" (con o sin barra final) — evita el error
   // "Invalid path specified" por duplicar /rest/v1 si el usuario ya lo incluyó.
   const base = url.trim().replace(/\/+$/, "").replace(/\/rest\/v1$/i, "");
-  return async function fetchTable(table) {
-    const res = await fetch(`${base}/rest/v1/${table}?select=*`, {
-      headers: { apikey: key, Authorization: `Bearer ${key}` },
-    });
+  const headers = { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+
+  async function fetchTable(table) {
+    const res = await fetch(`${base}/rest/v1/${table}?select=*`, { headers });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(`${table}: HTTP ${res.status} ${text.slice(0, 200)}`);
     }
     return res.json();
-  };
+  }
+
+  async function insertRow(table, row) {
+    const res = await fetch(`${base}/rest/v1/${table}`, {
+      method: "POST", headers: { ...headers, Prefer: "return=representation" }, body: JSON.stringify(row),
+    });
+    if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  }
+
+  async function updateRow(table, id, patch) {
+    const res = await fetch(`${base}/rest/v1/${table}?id=eq.${id}`, {
+      method: "PATCH", headers: { ...headers, Prefer: "return=representation" }, body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  }
+
+  async function deleteRow(table, id) {
+    const res = await fetch(`${base}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers });
+    if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  }
+
+  return { fetchTable, insertRow, updateRow, deleteRow };
 }
 
 // ---------- Carga de datos desde Supabase (reemplaza el REGIONS hardcodeado) ----------
 // Cada tabla se carga de forma independiente: si una falla (ej. deuda_flotante,
 // que es opcional en la mayoría de las regiones), las demás igual se muestran.
-function useRegionsFromSupabase(fetcher, enabled) {
+function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
   const [regions, setRegions] = useState(null);
   const [warnings, setWarnings] = useState([]);
   const [error, setError] = useState(null);
@@ -575,7 +745,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
     setWarnings([]);
     async function safeFetch(table) {
       try {
-        return await fetcher(table);
+        return await fetcher.fetchTable(table);
       } catch (e) {
         return { __error: e.message || String(e), __table: table };
       }
@@ -591,6 +761,8 @@ function useRegionsFromSupabase(fetcher, enabled) {
           safeFetch("viaticos"),
           safeFetch("viaticos_mensual"),
           safeFetch("viaticos_funcionario"),
+          safeFetch("acuerdos_compromisos"),
+          safeFetch("cobertura_visitas"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -599,7 +771,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -618,12 +790,19 @@ function useRegionsFromSupabase(fetcher, enabled) {
               return pmu || pmb ? { pmu: { meta: pmu?.meta_tecnica, real: pmu?.real_tecnica }, pmb: { meta: pmb?.meta_tecnica, real: pmb?.real_tecnica } } : null;
             })(),
             s7b: (() => {
-              const pmu = indData.find(i => i.region_id === r.id && i.programa === "PMU" && i.tipo === "rendicion");
-              const pmb = indData.find(i => i.region_id === r.id && i.programa === "PMB" && i.tipo === "rendicion");
-              return {
-                pmu: { metaT: pmu?.meta_tecnica ?? 0, realT: pmu?.real_tecnica ?? 0, metaF: pmu?.meta_financiera ?? 0, realF: pmu?.real_financiera ?? 0 },
-                pmb: { metaT: pmb?.meta_tecnica ?? 0, realT: pmb?.real_tecnica ?? 0, metaF: pmb?.meta_financiera ?? 0, realF: pmb?.real_financiera ?? 0 },
-              };
+              function latestAndPrev(programa) {
+                const rows = indData.filter(i => i.region_id === r.id && i.programa === programa && i.tipo === "rendicion")
+                  .sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+                return { latest: rows[0], prev: rows[1] };
+              }
+              const pmu = latestAndPrev("PMU"), pmb = latestAndPrev("PMB");
+              const shape = (x) => ({
+                metaT: x.latest?.meta_tecnica ?? 0, realT: x.latest?.real_tecnica ?? 0,
+                metaF: x.latest?.meta_financiera ?? 0, realF: x.latest?.real_financiera ?? 0,
+                prevRealT: x.prev?.real_tecnica ?? null, prevRealF: x.prev?.real_financiera ?? null,
+                corteFecha: x.latest?.corte_fecha, corteFechaPrev: x.prev?.corte_fecha,
+              });
+              return { pmu: shape(pmu), pmb: shape(pmb) };
             })(),
             s8: (() => {
               const d = deudaData.find(x => x.region_id === r.id);
@@ -639,6 +818,8 @@ function useRegionsFromSupabase(fetcher, enabled) {
             })(),
             s6mensual: viatMensualData.filter(m => m.region_id === r.id).sort((a, b) => a.orden_periodo - b.orden_periodo).map(m => ({ periodo: m.periodo, monto: m.monto_ejecutado })),
             s6funcionarios: viatFuncData.filter(f => f.region_id === r.id).sort((a, b) => b.monto - a.monto).map(f => ({ nombre: f.funcionario, monto: f.monto, n: f.n_viaticos, esJefe: f.es_jefe })),
+            s4data: acuerdosData.filter(a => a.region_id === r.id),
+            s5data: coberturaData.filter(c => c.region_id === r.id).sort((a, b) => new Date(b.fecha_visita) - new Date(a.fecha_visita)),
             s10: null,
             s11: null,
           };
@@ -649,7 +830,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
       }
     }
     load();
-  }, [enabled, fetcher]);
+  }, [enabled, fetcher, refreshKey]);
 
   return { regions, error, warnings };
 }
@@ -699,7 +880,8 @@ function ConnectScreen({ onConnect }) {
 export default function PanelURS() {
   const [creds, setCreds] = useState(null); // { url, key } o null
   const fetcher = useMemo(() => (creds ? makeSupabaseFetcher(creds.url, creds.key) : null), [creds]);
-  const { regions, error, warnings } = useRegionsFromSupabase(fetcher, !!creds);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const { regions, error, warnings } = useRegionsFromSupabase(fetcher, !!creds, refreshTick);
   const [region, setRegion] = useState(null);
 
   if (!creds) return <ConnectScreen onConnect={(url, key) => setCreds({ url, key })} />;
@@ -747,7 +929,7 @@ export default function PanelURS() {
           </div>
         )}
 
-        <RegionPanel data={data} />
+        <RegionPanel data={data} fetcher={fetcher} regionId={activeRegion} onDataChanged={() => setRefreshTick(t => t + 1)} />
       </div>
     </div>
   );

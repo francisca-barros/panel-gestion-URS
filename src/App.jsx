@@ -512,23 +512,43 @@ function makeSupabaseFetcher(url, key) {
 }
 
 // ---------- Carga de datos desde Supabase (reemplaza el REGIONS hardcodeado) ----------
+// Cada tabla se carga de forma independiente: si una falla (ej. deuda_flotante,
+// que es opcional en la mayoría de las regiones), las demás igual se muestran.
 function useRegionsFromSupabase(fetcher, enabled) {
   const [regions, setRegions] = useState(null);
+  const [warnings, setWarnings] = useState([]);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!enabled || !fetcher) return;
     setRegions(null);
     setError(null);
+    setWarnings([]);
+    async function safeFetch(table) {
+      try {
+        return await fetcher(table);
+      } catch (e) {
+        return { __error: e.message || String(e), __table: table };
+      }
+    }
     async function load() {
       try {
-        const [regData, comData, indData, deudaData, cartData] = await Promise.all([
-          fetcher("regiones"),
-          fetcher("comunas_rendicion"),
-          fetcher("indicadores_revision"),
-          fetcher("deuda_flotante"),
-          fetcher("capacidad_cartera"),
+        const results = await Promise.all([
+          safeFetch("regiones"),
+          safeFetch("comunas_rendicion"),
+          safeFetch("indicadores_revision"),
+          safeFetch("deuda_flotante"),
+          safeFetch("capacidad_cartera"),
         ]);
+        const warns = [];
+        const clean = results.map((r) => {
+          if (r && r.__error) { warns.push(`${r.__table}: ${r.__error}`); return []; }
+          return r;
+        });
+        if (warns.length) setWarnings(warns);
+
+        const [regData, comData, indData, deudaData, cartData] = clean;
+        if (!regData.length) throw new Error("La tabla 'regiones' está vacía o no se pudo leer — sin esto no hay nada que mostrar.");
 
         const out = {};
         for (const r of regData) {
@@ -571,7 +591,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
     load();
   }, [enabled, fetcher]);
 
-  return { regions, error };
+  return { regions, error, warnings };
 }
 
 function ConnectScreen({ onConnect }) {
@@ -619,7 +639,7 @@ function ConnectScreen({ onConnect }) {
 export default function PanelURS() {
   const [creds, setCreds] = useState(null); // { url, key } o null
   const fetcher = useMemo(() => (creds ? makeSupabaseFetcher(creds.url, creds.key) : null), [creds]);
-  const { regions, error } = useRegionsFromSupabase(fetcher, !!creds);
+  const { regions, error, warnings } = useRegionsFromSupabase(fetcher, !!creds);
   const [region, setRegion] = useState(null);
 
   if (!creds) return <ConnectScreen onConnect={(url, key) => setCreds({ url, key })} />;
@@ -657,6 +677,15 @@ export default function PanelURS() {
         <div style={{ background: AMBER_BG, border: "1px solid #F0D48A", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12.5, color: AMBER_TXT }}>
           ⏳ 13 regiones restantes sin datos aún — este panel muestra solo lo verificado. No representa el estado nacional.
         </div>
+
+        {warnings.length > 0 && (
+          <div style={{ background: "#FBDADA", border: "1px solid #F5B5B5", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: RED }}>
+            ⚠️ Algunas tablas no se pudieron leer (se muestran como "sin datos" en vez de bloquear el panel):
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
 
         <RegionPanel data={data} />
       </div>

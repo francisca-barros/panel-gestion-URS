@@ -413,7 +413,32 @@ function RegionPanel({ data }) {
         {tab === "s6" && (
           <div>
             <SectionTitle n="6" title="Viáticos — jefe/a URS y equipo" />
-            <Pending text="Sin fuente automatizada. A completar manualmente." />
+            {data.s6 ? (
+              <div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+                  Fuente: Estado de Ejecución del Gasto — Comisiones de Servicio, período {data.s6.periodo}.
+                </div>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
+                  <div style={{ flex: 1, minWidth: 180, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
+                    <div style={{ fontSize: 11, color: "#666" }}>Total equipo URS</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoTotal / 1000)}M</div>
+                    <div style={{ fontSize: 12, color: "#666" }}>{data.s6.nViaticos} viáticos</div>
+                  </div>
+                  {data.s6.montoJefe ? (
+                    <div style={{ flex: 1, minWidth: 180, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
+                      <div style={{ fontSize: 11, color: "#666" }}>Jefe/a URS ({data.s6.nombreJefeFuente})</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoJefe / 1000)}M</div>
+                      <div style={{ fontSize: 12, color: "#666" }}>{data.s6.nViaticosJefe} viáticos</div>
+                    </div>
+                  ) : (
+                    <div style={{ flex: 1, minWidth: 180, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14, color: "#999", fontSize: 12 }}>
+                      El/la jefe/a URS no aparece individualizado/a en el reporte (solo top 10 nacional) — no se puede separar su gasto del resto del equipo con esta fuente.
+                    </div>
+                  )}
+                </div>
+                <Pending text="Este reporte no separa jefe/a vs. resto del equipo salvo para quienes están en el top 10 nacional de gasto — no es una fuente completa de desglose individual." />
+              </div>
+            ) : <Pending text="Sin fuente automatizada para esta región." />}
           </div>
         )}
 
@@ -542,6 +567,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
           safeFetch("indicadores_revision"),
           safeFetch("deuda_flotante"),
           safeFetch("capacidad_cartera"),
+          safeFetch("viaticos"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -550,7 +576,7 @@ function useRegionsFromSupabase(fetcher, enabled) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -583,6 +609,10 @@ function useRegionsFromSupabase(fetcher, enabled) {
             s9: (() => {
               const c = cartData.find(x => x.region_id === r.id);
               return c ? { total: c.total, cerrados: c.cerrados, enEjecucion: c.en_ejecucion, otros: c.otros } : { total: 0, cerrados: 0, enEjecucion: 0, otros: 0 };
+            })(),
+            s6: (() => {
+              const v = viatData.find(x => x.region_id === r.id);
+              return v ? { periodo: v.periodo, montoTotal: v.monto_total, nViaticos: v.n_viaticos, montoJefe: v.monto_jefe, nViaticosJefe: v.n_viaticos_jefe, nombreJefeFuente: v.nombre_jefe_fuente } : null;
             })(),
             s10: null,
             s11: null,

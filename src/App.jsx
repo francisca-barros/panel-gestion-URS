@@ -425,7 +425,7 @@ const LOOKER_URL = "https://datastudio.google.com/u/0/reporting/4edc75ec-1e9f-49
 function RadarProyectos({ rows }) {
   const linkButton = (
     <a href={LOOKER_URL} target="_blank" rel="noopener noreferrer"
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: ACCENTBLUE, textDecoration: "none", background: LIGHTGRAY, padding: "6px 12px", borderRadius: 6, marginBottom: 10 }}>
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: TEAL, textDecoration: "none", background: LIGHTGRAY, padding: "6px 12px", borderRadius: 6, marginBottom: 10 }}>
       ↗ Ver reporte completo en Looker Studio
     </a>
   );

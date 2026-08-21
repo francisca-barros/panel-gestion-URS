@@ -420,6 +420,66 @@ function CoberturaEditor({ regionId, rows, fetcher, onChanged }) {
   );
 }
 
+const LOOKER_URL = "https://datastudio.google.com/u/0/reporting/4edc75ec-1e9f-4949-9577-1cc7607fc6e0/page/Pz5zF";
+
+function RadarProyectos({ rows }) {
+  const linkButton = (
+    <a href={LOOKER_URL} target="_blank" rel="noopener noreferrer"
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: ACCENTBLUE, textDecoration: "none", background: LIGHTGRAY, padding: "6px 12px", borderRadius: 6, marginBottom: 10 }}>
+      ↗ Ver reporte completo en Looker Studio
+    </a>
+  );
+  if (!rows || rows.length === 0) return (
+    <div>
+      {linkButton}
+      <Pending text="Sin datos del radar de proyectos por mes para esta región. Se completa a partir de capturas del reporte de Looker Studio." />
+    </div>
+  );
+
+  const estados = ["No Elegibles", "Elegibles", "Asignados", "Transferidos", "En Cierre", "Cerrados"];
+  const byEstado = {};
+  estados.forEach(e => { byEstado[e] = rows.filter(r => r.estado === e).sort((a, b) => a.orden - b.orden); });
+
+  // Genera alertas simples: tendencia monotónica y mayor variación mes a mes
+  const alerts = [];
+  estados.forEach(e => {
+    const serie = byEstado[e].filter(r => r.n !== null && r.n !== undefined);
+    if (serie.length < 2) return;
+    const first = serie[0].n, last = serie[serie.length - 1].n;
+    const delta = last - first;
+    const pct = first !== 0 ? (delta / first) * 100 : 0;
+    const monotonic = serie.every((r, i) => i === 0 || r.n >= serie[i - 1].n) || serie.every((r, i) => i === 0 || r.n <= serie[i - 1].n);
+    if (Math.abs(pct) >= 15) {
+      const worse = (e === "No Elegibles" || e === "En Cierre") ? delta > 0 : (e === "Cerrados" || e === "Elegibles" || e === "Transferidos") ? delta < 0 : null;
+      alerts.push({ estado: e, texto: `${e}: ${delta > 0 ? "+" : ""}${delta} proyectos (${pct > 0 ? "+" : ""}${pct.toFixed(0)}%) entre ${serie[0].periodo} y ${serie[serie.length - 1].periodo}${monotonic ? " — tendencia sostenida, no un salto puntual" : ""}.`, critical: worse === true });
+    }
+  });
+
+  return (
+    <div>
+      {linkButton}
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
+        Fuente: captura del reporte "Radar de Proyectos por Mes" (Looker Studio), corte 20-ago-2026. No incrustado en vivo — se actualiza cuando se comparte una nueva captura.
+      </div>
+      {alerts.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          {alerts.map((a, i) => (
+            <div key={i} style={{ background: a.critical ? "#FBDADA" : GREEN_BG, borderRadius: 6, padding: "8px 12px", marginBottom: 6, fontSize: 13, color: a.critical ? RED : GREEN_TXT, fontWeight: 600 }}>
+              {a.critical ? "⚠️ " : "ℹ️ "}{a.texto}
+            </div>
+          ))}
+        </div>
+      )}
+      {estados.map(e => (
+        <div key={e} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 4 }}>{e}</div>
+          <Table headers={byEstado[e].map(r => r.periodo)} rows={[byEstado[e].map(r => r.n ?? "—")]} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const tabs = [
@@ -659,7 +719,10 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                 ["Otros estados", data.s9.otros, (data.s9.otros / data.s9.total * 100).toFixed(1) + "%"],
               ]} />
             </div>
-            <Pending text="'Elegibles' y 'En creación municipal' no están en el Excel de cartera — requiere fuente de postulaciones." />
+            <Pending text="'En creación municipal' sigue sin fuente en el Excel de cartera." />
+
+            <SectionTitle n="9B" title="Radar de proyectos por mes (No Elegibles / Elegibles / Asignados / Transferidos / En Cierre / Cerrados)" />
+            <RadarProyectos rows={data.s9radar} />
           </div>
         )}
 
@@ -763,6 +826,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           safeFetch("viaticos_funcionario"),
           safeFetch("acuerdos_compromisos"),
           safeFetch("cobertura_visitas"),
+          safeFetch("estado_proyectos_mensual"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -771,7 +835,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -821,6 +885,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             s6funcionarios: viatFuncData.filter(f => f.region_id === r.id).sort((a, b) => b.monto - a.monto).map(f => ({ nombre: f.funcionario, monto: f.monto, n: f.n_viaticos, esJefe: f.es_jefe })),
             s4data: acuerdosData.filter(a => a.region_id === r.id),
             s5data: coberturaData.filter(c => c.region_id === r.id).sort((a, b) => new Date(b.fecha_visita) - new Date(a.fecha_visita)),
+            s9radar: radarData.filter(x => x.region_id === r.id).map(x => ({ estado: x.estado, periodo: x.periodo, orden: x.orden_periodo, n: x.n_proyectos, nuevos: x.n_nuevos })),
             s10: null,
             s11: null,
           };

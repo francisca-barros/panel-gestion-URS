@@ -943,7 +943,29 @@ function ConnectScreen({ onConnect }) {
   );
 }
 
-export default function PanelURS() {
+// ---------- Red de seguridad: si algo falla al renderizar, muestra el error en vez de pantalla en blanco ----------
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Panel URS crash:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, fontFamily: "Arial", maxWidth: 600, margin: "60px auto" }}>
+          <div style={{ color: RED, fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Se rompió algo al mostrar el panel</div>
+          <div style={{ background: "#FBDADA", borderRadius: 8, padding: 12, fontSize: 12, color: RED, fontFamily: "monospace", whiteSpace: "pre-wrap", marginBottom: 12 }}>
+            {String(this.state.error && this.state.error.message || this.state.error)}
+          </div>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>Copia el texto de arriba y mándaselo a Claude para que lo arregle.</div>
+          <button onClick={() => this.setState({ error: null })} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: NAVY, color: "white", cursor: "pointer" }}>Reintentar</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function PanelURSInner() {
   const envUrl = import.meta.env.VITE_SUPABASE_URL;
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
   const [creds, setCreds] = useState(envUrl && envKey ? { url: envUrl, key: envKey } : null); // { url, key } o null
@@ -1000,5 +1022,13 @@ export default function PanelURS() {
         <RegionPanel data={data} fetcher={fetcher} regionId={activeRegion} onDataChanged={() => setRefreshTick(t => t + 1)} />
       </div>
     </div>
+  );
+}
+
+export default function PanelURS() {
+  return (
+    <ErrorBoundary>
+      <PanelURSInner />
+    </ErrorBoundary>
   );
 }

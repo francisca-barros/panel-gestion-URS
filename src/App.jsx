@@ -805,8 +805,9 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
               return { pmu: shape(pmu), pmb: shape(pmb) };
             })(),
             s8: (() => {
-              const d = deudaData.find(x => x.region_id === r.id);
-              return d ? { totalExpedientes: d.total_expedientes, bandejaUrs: d.bandeja_urs, bandejaMonto: d.bandeja_monto_m, segundasCuota: d.segundas_cuota, segundasMonto: d.segundas_monto_m, pagadas: d.pagadas, analista: d.analista_central, sinBandeja: d.sin_bandeja, anomalia: d.anomalia_texto } : null;
+              const rows = deudaData.filter(x => x.region_id === r.id).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+              const d = rows[0];
+              return d ? { totalExpedientes: d.total_expedientes, bandejaUrs: d.bandeja_urs, bandejaMonto: d.bandeja_monto_m, segundasCuota: d.segundas_cuota, segundasMonto: d.segundas_monto_m, pagadas: d.pagadas, analista: d.analista_central, sinBandeja: d.sin_bandeja, anomalia: d.anomalia_texto, corteFecha: d.corte_fecha } : null;
             })(),
             s9: (() => {
               const c = cartData.find(x => x.region_id === r.id);

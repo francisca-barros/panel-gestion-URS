@@ -879,7 +879,9 @@ function ConnectScreen({ onConnect }) {
 }
 
 export default function PanelURS() {
-  const [creds, setCreds] = useState(null); // { url, key } o null
+  const envUrl = import.meta.env.VITE_SUPABASE_URL;
+  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const [creds, setCreds] = useState(envUrl && envKey ? { url: envUrl, key: envKey } : null); // { url, key } o null
   const fetcher = useMemo(() => (creds ? makeSupabaseFetcher(creds.url, creds.key) : null), [creds]);
   const [refreshTick, setRefreshTick] = useState(0);
   const { regions, error, warnings } = useRegionsFromSupabase(fetcher, !!creds, refreshTick);

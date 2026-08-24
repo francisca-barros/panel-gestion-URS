@@ -910,7 +910,33 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s10" && (
           <div>
             <SectionTitle n="10" title="IRAL — proyectos presentados por comuna" />
-            <Pending text="Sin fuente identificada para ninguna región aún." />
+            {data.s10 ? (
+              <div>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
+                  Fuente: planilla IRAL (líneas Tradicional=PMU y PMB Tradicional=PMB), corte 20-ago-2026, comparado contra 31-jul-2026.
+                </div>
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 }}>ALERTAS</div>
+                  {data.s10.resumen.map((r, i) => (
+                    <div key={i} style={{ background: LIGHTGRAY, borderRadius: 6, padding: "8px 12px", marginBottom: 6, fontSize: 13, color: NAVY_SOFT }}>
+                      {r.n} proyectos acumulados postulados por la línea {r.programa === "PMU" ? "Tradicional (PMU)" : "PMB Tradicional"} → {r.revision} {r.revision === 1 ? "se encuentra" : "se encuentran"} en Revisión URS
+                    </div>
+                  ))}
+                  {data.s10.nuevos.map((n, i) => (
+                    <div key={"n" + i} style={{ background: GREEN_BG, borderRadius: 6, padding: "8px 12px", marginBottom: 6, fontSize: 13, color: GREEN_TXT, fontWeight: 600 }}>
+                      ℹ️ 1 proyecto IRAL nuevo postulado en agosto: {n.comuna} — {n.programa} — {fmtM(n.monto / 1000)}M ({n.idp})
+                    </div>
+                  ))}
+                  {data.s10.nuevos.length === 0 && (
+                    <div style={{ background: LIGHTGRAY, borderRadius: 6, padding: "8px 12px", fontSize: 13, color: "#888" }}>
+                      Sin proyectos IRAL nuevos postulados en agosto.
+                    </div>
+                  )}
+                </div>
+                <Table headers={["Programa", "N° proyectos", "Monto"]}
+                  rows={data.s10.resumen.map(r => [r.programa === "PMU" ? "PMU Tradicional" : "PMB Tradicional", r.n, fmtM(r.monto / 1000) + "M"])} />
+              </div>
+            ) : <Pending text="Sin fuente identificada para esta región." />}
           </div>
         )}
 
@@ -1010,6 +1036,8 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           safeFetch("acuerdos_compromisos"),
           safeFetch("cobertura_visitas"),
           safeFetch("estado_proyectos_mensual"),
+          safeFetch("iral_resumen"),
+          safeFetch("iral_nuevos"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -1018,7 +1046,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -1071,7 +1099,12 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             s4data: acuerdosData.filter(a => a.region_id === r.id),
             s5data: coberturaData.filter(c => c.region_id === r.id).sort((a, b) => new Date(b.fecha_visita) - new Date(a.fecha_visita)),
             s9radar: radarData.filter(x => x.region_id === r.id).map(x => ({ estado: x.estado, periodo: x.periodo, orden: x.orden_periodo, n: x.n_proyectos, nuevos: x.n_nuevos })),
-            s10: null,
+            s10: (() => {
+              const resumen = iralResumenData.filter(x => x.region_id === r.id).map(x => ({ programa: x.programa, n: x.n_proyectos, monto: x.monto, revision: x.n_revision_urs }));
+              if (resumen.length === 0) return null;
+              const nuevos = iralNuevosData.filter(x => x.region_id === r.id).map(x => ({ idp: x.id_proyecto, comuna: x.comuna, programa: x.programa, monto: x.monto, estado: x.estado, nombre: x.nombre_proyecto }));
+              return { resumen, nuevos };
+            })(),
             s11: null,
           };
         }

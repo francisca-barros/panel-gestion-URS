@@ -495,6 +495,120 @@ function RadarProyectos({ rows }) {
   );
 }
 
+function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo }) {
+  const [form, setForm] = useState({ programa: "PMU", meta_tecnica: "", real_tecnica: "", meta_financiera: "", real_financiera: "", corte_fecha: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const filas = rows.filter(r => r.tipo === tipo).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+
+  async function addRow() {
+    if (!form.corte_fecha) return;
+    setBusy(true); setErr(null);
+    try {
+      await fetcher.insertRow("indicadores_revision", {
+        region_id: regionId, programa: form.programa, tipo,
+        meta_tecnica: form.meta_tecnica === "" ? null : Number(form.meta_tecnica),
+        real_tecnica: form.real_tecnica === "" ? null : Number(form.real_tecnica),
+        meta_financiera: form.meta_financiera === "" ? null : Number(form.meta_financiera),
+        real_financiera: form.real_financiera === "" ? null : Number(form.real_financiera),
+        corte_fecha: form.corte_fecha,
+      });
+      setForm({ ...form, meta_tecnica: "", real_tecnica: "", meta_financiera: "", real_financiera: "", corte_fecha: "" });
+      onChanged();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function removeRow(id) {
+    try { await fetcher.deleteRow("indicadores_revision", id); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, overflow: "hidden", marginBottom: 10 }}>
+        {filas.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "#888" }}>Sin registros todavía.</div>}
+        {filas.map(r => (
+          <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 12.5 }}>
+            <span style={{ flex: 1, fontWeight: 700 }}>{r.programa}</span>
+            <span style={{ flex: 1, color: "#666" }}>{r.corte_fecha}</span>
+            <span style={{ flex: 1 }}>Téc: {r.meta_tecnica ?? "—"}/{r.real_tecnica ?? "—"}</span>
+            <span style={{ flex: 1 }}>Fin: {r.meta_financiera ?? "—"}/{r.real_financiera ?? "—"}</span>
+            <button onClick={() => removeRow(r.id)} style={{ border: "none", background: "transparent", color: RED, cursor: "pointer" }}>✕</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", background: LIGHTGRAY, padding: 10, borderRadius: 8 }}>
+        <select value={form.programa} onChange={e => setForm({ ...form, programa: e.target.value })} style={{ padding: 5, borderRadius: 4, fontSize: 12 }}>
+          <option value="PMU">PMU</option><option value="PMB">PMB</option>
+        </select>
+        <input type="date" value={form.corte_fecha} onChange={e => setForm({ ...form, corte_fecha: e.target.value })} style={{ padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        <input placeholder="Meta téc." type="number" step="0.1" value={form.meta_tecnica} onChange={e => setForm({ ...form, meta_tecnica: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        <input placeholder="Real téc." type="number" step="0.1" value={form.real_tecnica} onChange={e => setForm({ ...form, real_tecnica: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        {tipo === "rendicion" && <>
+          <input placeholder="Meta fin." type="number" step="0.1" value={form.meta_financiera} onChange={e => setForm({ ...form, meta_financiera: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+          <input placeholder="Real fin." type="number" step="0.1" value={form.real_financiera} onChange={e => setForm({ ...form, real_financiera: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        </>}
+        <button onClick={addRow} disabled={busy || !form.corte_fecha} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: busy ? "white" : NAVY, color: busy ? "#999" : "white", fontWeight: 700, fontSize: 12, cursor: busy ? "default" : "pointer" }}>
+          {busy ? "..." : "+ Agregar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ComparadorMeses({ rows, programa }) {
+  const filas = rows.filter(r => r.programa === programa).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+  const fechas = filas.map(r => r.corte_fecha);
+  const [m1, setM1] = useState(fechas[1] || fechas[0] || "");
+  const [m2, setM2] = useState(fechas[0] || "");
+
+  useEffect(() => {
+    if (!fechas.includes(m1)) setM1(fechas[1] || fechas[0] || "");
+    if (!fechas.includes(m2)) setM2(fechas[0] || "");
+    // eslint-disable-next-line
+  }, [rows.length]);
+
+  if (filas.length === 0) return <Pending text={`Sin registros de ${programa} para comparar.`} />;
+
+  const r1 = filas.find(r => r.corte_fecha === m1);
+  const r2 = filas.find(r => r.corte_fecha === m2);
+
+  return (
+    <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, fontSize: 12.5 }}>
+        <span>Comparar:</span>
+        <select value={m1} onChange={e => setM1(e.target.value)} style={{ padding: 4, borderRadius: 4 }}>
+          {fechas.map(f => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <span>vs.</span>
+        <select value={m2} onChange={e => setM2(e.target.value)} style={{ padding: 4, borderRadius: 4 }}>
+          {fechas.map(f => <option key={f} value={f}>{f}</option>)}
+        </select>
+      </div>
+      {r1 && r2 ? (
+        <div style={{ display: "flex", gap: 20 }}>
+          {["meta_tecnica", "real_tecnica"].map((k) => null)}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: "#666" }}>{m1}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r1.real_tecnica ?? "—"}d</div>
+            <div style={{ fontSize: 11, color: "#666" }}>Meta {r1.meta_tecnica ?? "—"}d</div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: "#666" }}>{m2}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r2.real_tecnica ?? "—"}d</div>
+            <div style={{ fontSize: 11, color: "#666" }}>Meta {r2.meta_tecnica ?? "—"}d</div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: "#666" }}>Variación</div>
+            {r1.real_tecnica !== null && r2.real_tecnica !== null ? <DeltaBadge curr={r2.real_tecnica} prev={r1.real_tecnica} /> : "—"}
+          </div>
+        </div>
+      ) : <div style={{ fontSize: 12, color: "#888" }}>Elige dos meses con datos.</div>}
+    </div>
+  );
+}
+
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const [soloPmuPmb, setSoloPmuPmb] = useState(false);
@@ -710,18 +824,19 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s7" && (
           <div>
             <SectionTitle n="7A" title="Tiempo de evaluación de proyectos (pre-aprobación)" />
-            {data.s7a ? (
-              <div>
-                <EvalRow label="PMU — Evaluación" meta={data.s7a.pmu.meta} real={data.s7a.pmu.real} />
-                <EvalRow label="PMB — Evaluación" meta={data.s7a.pmb.meta} real={data.s7a.pmb.real} />
-              </div>
-            ) : <Pending text="Sin captura de 'Tiempo Evaluación de Proyectos' para esta región." />}
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>Comparación entre dos meses a elección:</div>
+            <ComparadorMeses rows={data.s7raw || []} programa="PMU" />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMB" />
+            <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación (PMU y PMB):</div>
+            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" />
 
             <SectionTitle n="7B" title="Tiempo de revisión de rendición (post-transferencia)" />
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
               <RendCard label="PMU" data={data.s7b.pmu} />
               <RendCard label="PMB" data={data.s7b.pmb} />
             </div>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Editar / agregar registros de rendición:</div>
+            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" />
           </div>
         )}
 
@@ -886,6 +1001,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             comunasPmuPmb: comData.filter(c => c.region_id === r.id && c.grupo_programa === "PMU_PMB").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, c.n_proyectos_numerador, c.n_proyectos_denominador]),
             s2regional: null,
             s3: null,
+            s7raw: indData.filter(i => i.region_id === r.id),
             s7a: (() => {
               const pmu = indData.find(i => i.region_id === r.id && i.programa === "PMU" && i.tipo === "evaluacion");
               const pmb = indData.find(i => i.region_id === r.id && i.programa === "PMB" && i.tipo === "evaluacion");

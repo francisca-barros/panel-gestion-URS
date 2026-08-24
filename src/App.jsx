@@ -495,19 +495,19 @@ function RadarProyectos({ rows }) {
   );
 }
 
-function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo }) {
+function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) {
   const [form, setForm] = useState({ programa: "PMU", meta_tecnica: "", real_tecnica: "", meta_financiera: "", real_financiera: "", corte_fecha: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
-  const filas = rows.filter(r => r.tipo === tipo).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+  const filas = rows.filter(r => r.tipo === tipo && (r.vista || "mensual") === vista).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
 
   async function addRow() {
     if (!form.corte_fecha) return;
     setBusy(true); setErr(null);
     try {
       await fetcher.insertRow("indicadores_revision", {
-        region_id: regionId, programa: form.programa, tipo,
+        region_id: regionId, programa: form.programa, tipo, vista,
         meta_tecnica: form.meta_tecnica === "" ? null : Number(form.meta_tecnica),
         real_tecnica: form.real_tecnica === "" ? null : Number(form.real_tecnica),
         meta_financiera: form.meta_financiera === "" ? null : Number(form.meta_financiera),
@@ -557,8 +557,8 @@ function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo }) {
   );
 }
 
-function ComparadorMeses({ rows, programa }) {
-  const filas = rows.filter(r => r.programa === programa).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false }) {
+  const filas = rows.filter(r => r.programa === programa && r.tipo === tipo && (r.vista || "mensual") === vista).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
   const fechas = filas.map(r => r.corte_fecha);
   const [m1, setM1] = useState(fechas[1] || fechas[0] || "");
   const [m2, setM2] = useState(fechas[0] || "");
@@ -569,7 +569,7 @@ function ComparadorMeses({ rows, programa }) {
     // eslint-disable-next-line
   }, [rows.length]);
 
-  if (filas.length === 0) return <Pending text={`Sin registros de ${programa} para comparar.`} />;
+  if (filas.length === 0) return <Pending text={`Sin registros de ${programa} (${vista}) para comparar.`} />;
 
   const r1 = filas.find(r => r.corte_fecha === m1);
   const r2 = filas.find(r => r.corte_fecha === m2);
@@ -577,6 +577,7 @@ function ComparadorMeses({ rows, programa }) {
   return (
     <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, fontSize: 12.5 }}>
+        <span style={{ fontWeight: 700, color: NAVY }}>{programa}</span>
         <span>Comparar:</span>
         <select value={m1} onChange={e => setM1(e.target.value)} style={{ padding: 4, borderRadius: 4 }}>
           {fechas.map(f => <option key={f} value={f}>{f}</option>)}
@@ -587,22 +588,41 @@ function ComparadorMeses({ rows, programa }) {
         </select>
       </div>
       {r1 && r2 ? (
-        <div style={{ display: "flex", gap: 20 }}>
-          {["meta_tecnica", "real_tecnica"].map((k) => null)}
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: "#666" }}>{m1}</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r1.real_tecnica ?? "—"}d</div>
-            <div style={{ fontSize: 11, color: "#666" }}>Meta {r1.meta_tecnica ?? "—"}d</div>
+        <div>
+          <div style={{ display: "flex", gap: 20, marginBottom: showFinanciera ? 10 : 0 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#999" }}>Técnica — {m1}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r1.real_tecnica ?? "—"}d</div>
+              <div style={{ fontSize: 11, color: "#666" }}>Meta {r1.meta_tecnica ?? "—"}d</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#999" }}>Técnica — {m2}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r2.real_tecnica ?? "—"}d</div>
+              <div style={{ fontSize: 11, color: "#666" }}>Meta {r2.meta_tecnica ?? "—"}d</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#999" }}>Variación técnica</div>
+              {r1.real_tecnica !== null && r2.real_tecnica !== null ? <DeltaBadge curr={r2.real_tecnica} prev={r1.real_tecnica} /> : "—"}
+            </div>
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: "#666" }}>{m2}</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r2.real_tecnica ?? "—"}d</div>
-            <div style={{ fontSize: 11, color: "#666" }}>Meta {r2.meta_tecnica ?? "—"}d</div>
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: "#666" }}>Variación</div>
-            {r1.real_tecnica !== null && r2.real_tecnica !== null ? <DeltaBadge curr={r2.real_tecnica} prev={r1.real_tecnica} /> : "—"}
-          </div>
+          {showFinanciera && (
+            <div style={{ display: "flex", gap: 20, borderTop: `1px solid ${LIGHTGRAY}`, paddingTop: 10 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: "#999" }}>Financiera — {m1}</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r1.real_financiera ?? "—"}d</div>
+                <div style={{ fontSize: 11, color: "#666" }}>Meta {r1.meta_financiera ?? "—"}d</div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: "#999" }}>Financiera — {m2}</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r2.real_financiera ?? "—"}d</div>
+                <div style={{ fontSize: 11, color: "#666" }}>Meta {r2.meta_financiera ?? "—"}d</div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, color: "#999" }}>Variación financiera</div>
+                {r1.real_financiera !== null && r2.real_financiera !== null ? <DeltaBadge curr={r2.real_financiera} prev={r1.real_financiera} /> : "—"}
+              </div>
+            </div>
+          )}
         </div>
       ) : <div style={{ fontSize: 12, color: "#888" }}>Elige dos meses con datos.</div>}
     </div>
@@ -612,6 +632,8 @@ function ComparadorMeses({ rows, programa }) {
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const [soloPmuPmb, setSoloPmuPmb] = useState(false);
+  const [vista7a, setVista7a] = useState("mensual");
+  const [vista7b, setVista7b] = useState("mensual");
   const tabs = [
     ["resumen", "Resumen"],
     ["s2", "2. Rendición"],
@@ -824,19 +846,26 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s7" && (
           <div>
             <SectionTitle n="7A" title="Tiempo de evaluación de proyectos (pre-aprobación)" />
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>Comparación entre dos meses a elección:</div>
-            <ComparadorMeses rows={data.s7raw || []} programa="PMU" />
-            <ComparadorMeses rows={data.s7raw || []} programa="PMB" />
-            <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación (PMU y PMB):</div>
-            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" />
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_SOFT }}>Vista:</span>
+              <button onClick={() => setVista7a("mensual")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7a === "mensual" ? NAVY : "white", color: vista7a === "mensual" ? "white" : NAVY }}>Mensual</button>
+              <button onClick={() => setVista7a("acumulado")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7a === "acumulado" ? NAVY : "white", color: vista7a === "acumulado" ? "white" : NAVY }}>Acumulado</button>
+            </div>
+            <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="evaluacion" vista={vista7a} showFinanciera={false} />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="evaluacion" vista={vista7a} showFinanciera={false} />
+            <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación — vista {vista7a} (PMU y PMB):</div>
+            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} />
 
             <SectionTitle n="7B" title="Tiempo de revisión de rendición (post-transferencia)" />
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
-              <RendCard label="PMU" data={data.s7b.pmu} />
-              <RendCard label="PMB" data={data.s7b.pmb} />
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_SOFT }}>Vista:</span>
+              <button onClick={() => setVista7b("mensual")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7b === "mensual" ? NAVY : "white", color: vista7b === "mensual" ? "white" : NAVY }}>Mensual</button>
+              <button onClick={() => setVista7b("acumulado")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7b === "acumulado" ? NAVY : "white", color: vista7b === "acumulado" ? "white" : NAVY }}>Acumulado</button>
             </div>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Editar / agregar registros de rendición:</div>
-            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="rendicion" vista={vista7b} showFinanciera={true} />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="rendicion" vista={vista7b} showFinanciera={true} />
+            <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de rendición — vista {vista7b} (PMU y PMB):</div>
+            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} />
           </div>
         )}
 
@@ -955,7 +984,9 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
 
   useEffect(() => {
     if (!enabled || !fetcher) return;
-    setRegions(null);
+    // No reseteamos 'regions' a null aquí: si es un refresh (tras editar), mantenemos
+    // los datos actuales en pantalla mientras llega lo nuevo, para no desmontar
+    // RegionPanel y perder en qué pestaña/región estaba el usuario.
     setError(null);
     setWarnings([]);
     async function safeFetch(table) {

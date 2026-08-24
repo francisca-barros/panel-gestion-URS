@@ -610,9 +610,9 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                 <span style={{ fontSize: 11.5, color: RED, marginLeft: 6 }}>⚠️ Sin datos PMU/PMB cargados para esta región todavía.</span>
               )}
             </div>
-            {soloPmuPmb && data.comunasPmuPmb && data.comunasPmuPmb.length > 0 && (
+            {data.comunasTodos && data.comunasTodos.length > 0 && (
               <div style={{ fontSize: 11.5, color: "#666", marginBottom: 10 }}>
-                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa), corte 21-ago-2026. Numerador = saldo de PMU/PMB con Fecha Fin de Actividades vencida; denominador = transferido de TODOS los PMU/PMB de la región (vigentes + vencidos). Misma metodología para las 3 regiones.
+                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa), corte 21-ago-2026. Numerador = saldo con Fecha Fin de Actividades vencida{soloPmuPmb ? " (solo PMU/PMB)" : " (todos los programas)"}; denominador = transferido de todos los proyectos{soloPmuPmb ? " PMU/PMB" : ""} de la región (vigentes + vencidos). Misma fuente y fórmula para las 3 regiones y ambas vistas.
               </div>
             )}
 
@@ -627,12 +627,9 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
               Nivel comunal — ordenado por urgencia (saldo pendiente ↓). Fórmula corregida: denominador = todos los proyectos vencidos.
             </div>
-            <Table headers={soloPmuPmb ? ["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda", "N° proy. numerador", "N° proy. denominador"] : ["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda"]}
+            <Table headers={["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda", "N° proy. numerador", "N° proy. denominador"]}
               highlightTop={5}
-              rows={rankedComunas.map((c, i) => {
-                const base = [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]), fontWeight: i < 5 ? 700 : 400 }}>{c[3].toFixed(2)}%</span>];
-                return soloPmuPmb ? [...base, c[4] ?? "—", c[5] ?? "—"] : base;
-              })} />
+              rows={rankedComunas.map((c, i) => [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]), fontWeight: i < 5 ? 700 : 400 }}>{c[3].toFixed(2)}%</span>, c[4] ?? "—", c[5] ?? "—"])} />
           </div>
         )}
 
@@ -885,7 +882,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           out[r.id] = {
             label: r.label, jefeUrs: r.jefe_urs, jefeConfianza: r.jefe_urs_confianza,
             ciclo: r.ciclo, primeraVez: r.primera_vez,
-            comunasTodos: comData.filter(c => c.region_id === r.id && (c.grupo_programa || "TODOS") === "TODOS").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, null, null]),
+            comunasTodos: comData.filter(c => c.region_id === r.id && (c.grupo_programa || "TODOS") === "TODOS").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, c.n_proyectos_numerador, c.n_proyectos_denominador]),
             comunasPmuPmb: comData.filter(c => c.region_id === r.id && c.grupo_programa === "PMU_PMB").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, c.n_proyectos_numerador, c.n_proyectos_denominador]),
             s2regional: null,
             s3: null,

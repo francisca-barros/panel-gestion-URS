@@ -611,8 +611,8 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               )}
             </div>
             {soloPmuPmb && data.comunasPmuPmb && data.comunasPmuPmb.length > 0 && (
-              <div style={{ fontSize: 11.5, color: AMBER_TXT, marginBottom: 10 }}>
-                ⚠️ Metodología no uniforme entre regiones: Atacama/Magallanes usan denominador = todo el histórico PMU/PMB (sin filtro de vencido); Valparaíso todavía usa denominador acotado a vencidos con ventana de 10 años. Los % no son directamente comparables entre regiones hasta unificar.
+              <div style={{ fontSize: 11.5, color: "#666", marginBottom: 10 }}>
+                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa), corte 21-ago-2026. Numerador = saldo de PMU/PMB con Fecha Fin de Actividades vencida; denominador = transferido de TODOS los PMU/PMB de la región (vigentes + vencidos). Misma metodología para las 3 regiones.
               </div>
             )}
 

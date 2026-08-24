@@ -629,6 +629,62 @@ function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false }
   );
 }
 
+function CarteraCriticaEditor({ regionId, rows, fetcher, onChanged }) {
+  const [form, setForm] = useState({ comuna_proyecto: "", descripcion: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function addRow() {
+    if (!form.comuna_proyecto.trim() || !form.descripcion.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      await fetcher.insertRow("cartera_critica", { region_id: regionId, comuna_proyecto: form.comuna_proyecto, descripcion: form.descripcion });
+      setForm({ comuna_proyecto: "", descripcion: "" });
+      onChanged();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function updateField(id, field, value) {
+    try { await fetcher.updateRow("cartera_critica", id, { [field]: value, updated_at: new Date().toISOString() }); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+  async function removeRow(id) {
+    try { await fetcher.deleteRow("cartera_critica", id); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <div>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, overflow: "hidden" }}>
+        {rows.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#888" }}>Sin nudos críticos registrados todavía.</div>}
+        {rows.map((c) => (
+          <div key={c.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 12px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 13 }}>
+            <input defaultValue={c.comuna_proyecto} onBlur={(e) => e.target.value !== c.comuna_proyecto && updateField(c.id, "comuna_proyecto", e.target.value)}
+              placeholder="Comuna / proyecto" style={{ flex: 1, border: "1px solid transparent", padding: 4, borderRadius: 4, fontWeight: 700 }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <textarea defaultValue={c.descripcion} onBlur={(e) => e.target.value !== c.descripcion && updateField(c.id, "descripcion", e.target.value)}
+              placeholder="Descripción del nudo crítico" rows={2} style={{ flex: 3, border: "1px solid transparent", padding: 4, borderRadius: 4, fontFamily: "Arial", resize: "vertical" }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <button onClick={() => removeRow(c.id)} title="Eliminar" style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 14 }}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, padding: 12, background: LIGHTGRAY, borderRadius: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: NAVY_SOFT, marginBottom: 8 }}>Agregar nudo crítico (máx. 3 recomendado)</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input placeholder="Comuna / proyecto" value={form.comuna_proyecto} onChange={e => setForm({ ...form, comuna_proyecto: e.target.value })}
+            style={{ flex: 1, minWidth: 150, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input placeholder="Descripción" value={form.descripcion} onChange={e => setForm({ ...form, descripcion: e.target.value })}
+            style={{ flex: 3, minWidth: 200, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <button onClick={addRow} disabled={busy || !form.comuna_proyecto.trim() || !form.descripcion.trim()}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: busy ? LIGHTGRAY : NAVY, color: "white", fontWeight: 700, fontSize: 13, cursor: busy ? "default" : "pointer" }}>
+            {busy ? "Guardando…" : "+ Agregar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const [soloPmuPmb, setSoloPmuPmb] = useState(false);
@@ -772,7 +828,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s3" && (
           <div>
             <SectionTitle n="3" title="Cartera estratégica y nudos críticos" />
-            {data.s3 ? <p style={{ fontSize: 13, color: NAVY_SOFT, lineHeight: 1.6 }}>{data.s3}</p> : <Pending text="Sin nudos críticos identificados previamente. Completar con la URS antes de la reunión." />}
+            <CarteraCriticaEditor regionId={regionId} rows={data.s3data || []} fetcher={fetcher} onChanged={onDataChanged} />
           </div>
         )}
 
@@ -1038,6 +1094,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           safeFetch("estado_proyectos_mensual"),
           safeFetch("iral_resumen"),
           safeFetch("iral_nuevos"),
+          safeFetch("cartera_critica"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -1046,7 +1103,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData, carteraCriticaData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -1097,6 +1154,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             s6mensual: viatMensualData.filter(m => m.region_id === r.id).sort((a, b) => a.orden_periodo - b.orden_periodo).map(m => ({ periodo: m.periodo, monto: m.monto_ejecutado })),
             s6funcionarios: viatFuncData.filter(f => f.region_id === r.id).sort((a, b) => b.monto - a.monto).map(f => ({ nombre: f.funcionario, monto: f.monto, n: f.n_viaticos, esJefe: f.es_jefe })),
             s4data: acuerdosData.filter(a => a.region_id === r.id),
+            s3data: carteraCriticaData.filter(c => c.region_id === r.id),
             s5data: coberturaData.filter(c => c.region_id === r.id).sort((a, b) => new Date(b.fecha_visita) - new Date(a.fecha_visita)),
             s9radar: radarData.filter(x => x.region_id === r.id).map(x => ({ estado: x.estado, periodo: x.periodo, orden: x.orden_periodo, n: x.n_proyectos, nuevos: x.n_nuevos })),
             s10: (() => {

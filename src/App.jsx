@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from "recharts";
 
 // ---------- Paleta institucional (misma de las fichas .docx) ----------
 const NAVY = "#0F2942";
@@ -470,18 +471,33 @@ function RadarProyectos({ rows }) {
           ))}
         </div>
       )}
-      {estados.map(e => (
-        <div key={e} style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 4 }}>{e}</div>
-          <Table headers={byEstado[e].map(r => r.periodo)} rows={[byEstado[e].map(r => r.n ?? "—")]} />
-        </div>
-      ))}
+      {estados.map(e => {
+        const chartData = byEstado[e].map(r => ({ periodo: r.periodo, "N° proyectos": r.n, "Nuevos": r.nuevos }));
+        const hasNuevos = byEstado[e].some(r => r.nuevos !== null && r.nuevos !== undefined);
+        return (
+          <div key={e} style={{ marginBottom: 18, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: "10px 14px 4px" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 4 }}>{e}</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={LIGHTGRAY} />
+                <XAxis dataKey="periodo" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line type="monotone" dataKey="N° proyectos" stroke={NAVY} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                {hasNuevos && <Line type="monotone" dataKey="Nuevos" stroke={RED} strokeWidth={1.5} dot={{ r: 2 }} connectNulls />}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
+  const [soloPmuPmb, setSoloPmuPmb] = useState(false);
   const tabs = [
     ["resumen", "Resumen"],
     ["s2", "2. Rendición"],
@@ -496,13 +512,15 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
     ["s11", "11. Evolución"],
   ];
 
-  const totalComunal = useMemo(() => {
-    const t = data.comunas.reduce((a, c) => a + c[1], 0);
-    const s = data.comunas.reduce((a, c) => a + c[2], 0);
-    return { t, s, pct: (s / t) * 100 };
-  }, [data]);
+  const comunasActivas = (soloPmuPmb ? data.comunasPmuPmb : data.comunasTodos) || [];
 
-  const rankedComunas = useMemo(() => [...data.comunas].sort((a, b) => b[2] - a[2]), [data]);
+  const totalComunal = useMemo(() => {
+    const t = comunasActivas.reduce((a, c) => a + c[1], 0);
+    const s = comunasActivas.reduce((a, c) => a + c[2], 0);
+    return { t, s, pct: t ? (s / t) * 100 : 0 };
+  }, [comunasActivas]);
+
+  const rankedComunas = useMemo(() => [...comunasActivas].sort((a, b) => b[2] - a[2]), [comunasActivas]);
 
   return (
     <div>
@@ -579,6 +597,25 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s2" && (
           <div>
             <SectionTitle n="2" title="Cuadro de mando presupuestario y rendiciones" />
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_SOFT }}>Vista:</span>
+              <button onClick={() => setSoloPmuPmb(false)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: !soloPmuPmb ? NAVY : "white", color: !soloPmuPmb ? "white" : NAVY }}>
+                Todos los programas
+              </button>
+              <button onClick={() => setSoloPmuPmb(true)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: soloPmuPmb ? NAVY : "white", color: soloPmuPmb ? "white" : NAVY }}>
+                Solo PMU / PMB
+              </button>
+              {soloPmuPmb && (!data.comunasPmuPmb || data.comunasPmuPmb.length === 0) && (
+                <span style={{ fontSize: 11.5, color: RED, marginLeft: 6 }}>⚠️ Sin datos PMU/PMB cargados para esta región todavía.</span>
+              )}
+            </div>
+            {soloPmuPmb && data.comunasPmuPmb && data.comunasPmuPmb.length > 0 && (
+              <div style={{ fontSize: 11.5, color: AMBER_TXT, marginBottom: 10 }}>
+                ⚠️ Metodología no uniforme entre regiones: Atacama/Magallanes usan denominador = todo el histórico PMU/PMB (sin filtro de vencido); Valparaíso todavía usa denominador acotado a vencidos con ventana de 10 años. Los % no son directamente comparables entre regiones hasta unificar.
+              </div>
+            )}
+
             {data.s2regional && (
               <>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>Nivel regional — evolución de cortes</div>
@@ -590,9 +627,12 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
               Nivel comunal — ordenado por urgencia (saldo pendiente ↓). Fórmula corregida: denominador = todos los proyectos vencidos.
             </div>
-            <Table headers={["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda"]}
+            <Table headers={soloPmuPmb ? ["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda", "N° proy. numerador", "N° proy. denominador"] : ["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda"]}
               highlightTop={5}
-              rows={rankedComunas.map((c, i) => [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]), fontWeight: i < 5 ? 700 : 400 }}>{c[3].toFixed(2)}%</span>])} />
+              rows={rankedComunas.map((c, i) => {
+                const base = [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]), fontWeight: i < 5 ? 700 : 400 }}>{c[3].toFixed(2)}%</span>];
+                return soloPmuPmb ? [...base, c[4] ?? "—", c[5] ?? "—"] : base;
+              })} />
           </div>
         )}
 
@@ -845,7 +885,8 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           out[r.id] = {
             label: r.label, jefeUrs: r.jefe_urs, jefeConfianza: r.jefe_urs_confianza,
             ciclo: r.ciclo, primeraVez: r.primera_vez,
-            comunas: comData.filter(c => c.region_id === r.id).map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda]),
+            comunasTodos: comData.filter(c => c.region_id === r.id && (c.grupo_programa || "TODOS") === "TODOS").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, null, null]),
+            comunasPmuPmb: comData.filter(c => c.region_id === r.id && c.grupo_programa === "PMU_PMB").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, c.n_proyectos_numerador, c.n_proyectos_denominador]),
             s2regional: null,
             s3: null,
             s7a: (() => {

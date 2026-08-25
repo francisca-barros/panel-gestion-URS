@@ -352,17 +352,17 @@ function AcuerdosEditor({ regionId, rows, fetcher, onChanged }) {
   );
 }
 
-function CoberturaEditor({ regionId, rows, fetcher, onChanged }) {
-  const [form, setForm] = useState({ comuna: "", fecha_visita: "", visitado_por: "", notas: "" });
+function CoberturaEditor({ regionId, rows, fetcher, onChanged, comunasCanonicas }) {
+  const [form, setForm] = useState({ comuna: comunasCanonicas[0] || "", fecha_visita: "", visitado_por: "", notas: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
   async function addRow() {
-    if (!form.comuna.trim() || !form.fecha_visita) return;
+    if (!form.comuna || !form.fecha_visita) return;
     setBusy(true); setErr(null);
     try {
       await fetcher.insertRow("cobertura_visitas", { region_id: regionId, comuna: form.comuna, fecha_visita: form.fecha_visita, visitado_por: form.visitado_por || null, notas: form.notas || null });
-      setForm({ comuna: "", fecha_visita: "", visitado_por: "", notas: "" });
+      setForm({ ...form, fecha_visita: "", visitado_por: "", notas: "" });
       onChanged();
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   }
@@ -371,19 +371,38 @@ function CoberturaEditor({ regionId, rows, fetcher, onChanged }) {
     catch (e) { setErr(e.message); }
   }
 
-  const comunasUnicas = new Set(rows.map(r => r.comuna));
+  const visitCounts = {};
+  rows.forEach(r => { visitCounts[r.comuna] = (visitCounts[r.comuna] || 0) + 1; });
+  const comunasVisitadas = new Set(rows.map(r => r.comuna));
+  const comunasSinVisitar = comunasCanonicas.filter(c => !comunasVisitadas.has(c));
 
   return (
     <div>
       {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+
       <div style={{ display: "flex", gap: 14, marginBottom: 12 }}>
         <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, flex: 1 }}>
-          <div style={{ fontSize: 11, color: "#666" }}>Comunas distintas visitadas</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{comunasUnicas.size}</div>
+          <div style={{ fontSize: 11, color: "#666" }}>Comunas visitadas</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{comunasVisitadas.size}/{comunasCanonicas.length}</div>
         </div>
         <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, flex: 1 }}>
           <div style={{ fontSize: 11, color: "#666" }}>Visitas totales registradas</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: NAVY }}>{rows.length}</div>
+        </div>
+      </div>
+
+      {comunasSinVisitar.length > 0 && (
+        <div style={{ background: "#FBDADA", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 12.5, color: RED }}>
+          ⚠️ Sin visitar ({comunasSinVisitar.length}): {comunasSinVisitar.join(", ")}
+        </div>
+      )}
+
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: NAVY_SOFT, marginBottom: 6 }}>Visitas por comuna</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {comunasCanonicas.map(c => (
+            <Pill key={c} tone={visitCounts[c] ? "good" : "neutral"}>{c}: {visitCounts[c] || 0}</Pill>
+          ))}
         </div>
       </div>
 
@@ -403,15 +422,17 @@ function CoberturaEditor({ regionId, rows, fetcher, onChanged }) {
       <div style={{ marginTop: 14, padding: 12, background: LIGHTGRAY, borderRadius: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: NAVY_SOFT, marginBottom: 8 }}>Registrar nueva visita</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input placeholder="Comuna" value={form.comuna} onChange={e => setForm({ ...form, comuna: e.target.value })}
-            style={{ flex: 1.5, minWidth: 140, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <select value={form.comuna} onChange={e => setForm({ ...form, comuna: e.target.value })}
+            style={{ flex: 1.5, minWidth: 160, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }}>
+            {comunasCanonicas.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           <input type="date" value={form.fecha_visita} onChange={e => setForm({ ...form, fecha_visita: e.target.value })}
             style={{ flex: 1, minWidth: 130, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
           <input placeholder="Visitado por (ej. Jefe/a URS)" value={form.visitado_por} onChange={e => setForm({ ...form, visitado_por: e.target.value })}
             style={{ flex: 1.5, minWidth: 150, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
           <input placeholder="Notas (opcional)" value={form.notas} onChange={e => setForm({ ...form, notas: e.target.value })}
             style={{ flex: 2, minWidth: 150, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
-          <button onClick={addRow} disabled={busy || !form.comuna.trim() || !form.fecha_visita}
+          <button onClick={addRow} disabled={busy || !form.comuna || !form.fecha_visita}
             style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: busy ? LIGHTGRAY : NAVY, color: "white", fontWeight: 700, fontSize: 13, cursor: busy ? "default" : "pointer" }}>
             {busy ? "Guardando…" : "+ Registrar"}
           </button>
@@ -685,6 +706,69 @@ function CarteraCriticaEditor({ regionId, rows, fetcher, onChanged }) {
   );
 }
 
+function ProyectosPriorizadosEditor({ regionId, rows, fetcher, onChanged }) {
+  const [form, setForm] = useState({ comuna: "", nombre_proyecto: "", justificacion: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function addRow() {
+    if (!form.comuna.trim() || !form.nombre_proyecto.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      await fetcher.insertRow("proyectos_priorizados", { region_id: regionId, comuna: form.comuna, nombre_proyecto: form.nombre_proyecto, justificacion: form.justificacion || null });
+      setForm({ comuna: "", nombre_proyecto: "", justificacion: "" });
+      onChanged();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function updateField(id, field, value) {
+    try { await fetcher.updateRow("proyectos_priorizados", id, { [field]: value, updated_at: new Date().toISOString() }); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+  async function removeRow(id) {
+    try { await fetcher.deleteRow("proyectos_priorizados", id); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <div>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
+        Proyectos sin financiamiento aún, que el/la jefe/a URS considera urgente priorizar.
+      </div>
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, overflow: "hidden" }}>
+        {rows.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#888" }}>Sin proyectos priorizados todavía.</div>}
+        {rows.map((p) => (
+          <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 12px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 13 }}>
+            <input defaultValue={p.comuna} onBlur={(e) => e.target.value !== p.comuna && updateField(p.id, "comuna", e.target.value)}
+              placeholder="Comuna" style={{ flex: 1, border: "1px solid transparent", padding: 4, borderRadius: 4, fontWeight: 700 }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <input defaultValue={p.nombre_proyecto} onBlur={(e) => e.target.value !== p.nombre_proyecto && updateField(p.id, "nombre_proyecto", e.target.value)}
+              placeholder="Nombre del proyecto" style={{ flex: 2, border: "1px solid transparent", padding: 4, borderRadius: 4 }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <textarea defaultValue={p.justificacion || ""} onBlur={(e) => e.target.value !== p.justificacion && updateField(p.id, "justificacion", e.target.value)}
+              placeholder="Por qué es urgente" rows={2} style={{ flex: 3, border: "1px solid transparent", padding: 4, borderRadius: 4, fontFamily: "Arial", resize: "vertical" }} onFocus={(e) => e.target.style.border = `1px solid ${LIGHTGRAY}`} />
+            <button onClick={() => removeRow(p.id)} title="Eliminar" style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 14 }}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, padding: 12, background: LIGHTGRAY, borderRadius: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: NAVY_SOFT, marginBottom: 8 }}>Agregar proyecto priorizado</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input placeholder="Comuna" value={form.comuna} onChange={e => setForm({ ...form, comuna: e.target.value })}
+            style={{ flex: 1, minWidth: 130, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input placeholder="Nombre del proyecto" value={form.nombre_proyecto} onChange={e => setForm({ ...form, nombre_proyecto: e.target.value })}
+            style={{ flex: 2, minWidth: 180, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <input placeholder="Justificación (por qué urgente)" value={form.justificacion} onChange={e => setForm({ ...form, justificacion: e.target.value })}
+            style={{ flex: 3, minWidth: 200, padding: 7, borderRadius: 6, border: `1px solid ${GRAYBLUE}`, fontSize: 13 }} />
+          <button onClick={addRow} disabled={busy || !form.comuna.trim() || !form.nombre_proyecto.trim()}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: busy ? LIGHTGRAY : NAVY, color: "white", fontWeight: 700, fontSize: 13, cursor: busy ? "default" : "pointer" }}>
+            {busy ? "Guardando…" : "+ Agregar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const [soloPmuPmb, setSoloPmuPmb] = useState(false);
@@ -702,6 +786,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
     ["s9", "9. Levantamiento"],
     ["s10", "10. IRAL"],
     ["s11", "11. Evolución"],
+    ["s12", "12. Priorizados URS"],
   ];
 
   const comunasActivas = (soloPmuPmb ? data.comunasPmuPmb : data.comunasTodos) || [];
@@ -712,7 +797,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
     return { t, s, pct: t ? (s / t) * 100 : 0 };
   }, [comunasActivas]);
 
-  const rankedComunas = useMemo(() => [...comunasActivas].sort((a, b) => b[2] - a[2]), [comunasActivas]);
+  const rankedComunas = useMemo(() => [...comunasActivas].sort((a, b) => b[1] - a[1]), [comunasActivas]);
 
   return (
     <div>
@@ -817,11 +902,13 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               </>
             )}
             <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-              Nivel comunal — ordenado por urgencia (saldo pendiente ↓). Fórmula corregida: denominador = todos los proyectos vencidos.
+              Nivel comunal — ordenado por monto transferido (mayor a menor). Fórmula corregida: denominador = todos los proyectos vencidos.
             </div>
-            <Table headers={["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda", "N° proy. numerador", "N° proy. denominador"]}
-              highlightTop={5}
-              rows={rankedComunas.map((c, i) => [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]), fontWeight: i < 5 ? 700 : 400 }}>{c[3].toFixed(2)}%</span>, c[4] ?? "—", c[5] ?? "—"])} />
+            <Table headers={["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda", "N° proy. numerador", "N° proy. denominador", "Aporte per cápita (2021-2026)"]}
+              rows={rankedComunas.map((c, i) => {
+                const pc = data.percapita ? data.percapita[c[0].toUpperCase()] : null;
+                return [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]) }}>{c[3].toFixed(2)}%</span>, c[4] ?? "—", c[5] ?? "—", pc ? "$" + Math.round(pc).toLocaleString("es-CL") : "—"];
+              })} />
           </div>
         )}
 
@@ -842,7 +929,8 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s5" && (
           <div>
             <SectionTitle n="5" title="Cobertura territorial — recorrido de comunas" />
-            <CoberturaEditor regionId={regionId} rows={data.s5data || []} fetcher={fetcher} onChanged={onDataChanged} />
+            <CoberturaEditor regionId={regionId} rows={data.s5data || []} fetcher={fetcher} onChanged={onDataChanged}
+              comunasCanonicas={[...new Set((data.comunasTodos || []).map(c => c[0]))].sort()} />
           </div>
         )}
 
@@ -939,6 +1027,14 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                     ["Sin bandeja registrada", data.s8.sinBandeja, "—"],
                   ]} />
                 {data.s8.anomalia && <div style={{ marginTop: 10 }}><Pill tone="bad">⚠️ Anomalía</Pill><p style={{ fontSize: 12, color: RED, marginTop: 6 }}>{data.s8.anomalia}</p></div>}
+
+                {data.deudaDetalle && data.deudaDetalle.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 6 }}>Expedientes pendientes de transferir, en bandeja URS</div>
+                    <Table headers={["Expediente", "Comuna", "Monto ($M)", "2ª cuota"]}
+                      rows={data.deudaDetalle.map(d => [d.expediente || "—", d.comuna, fmtM(d.monto / 1e6), d.segunda_cuota ? <Pill tone="warn">Sí</Pill> : "No"])} />
+                  </div>
+                )}
               </div>
             ) : <Pending text="Falta CSV de la hoja 'DF P03 Priorización' filtrado a esta región." />}
           </div>
@@ -1008,6 +1104,13 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                   ["% deuda rendición", data.s11.pct[0] + "%", data.s11.pct[1] + "%", <span style={{ color: GREEN_TXT, fontWeight: 700 }}>▼ mejora</span>],
                 ]} />
             ) : <Pending text="Primera bilateral: sin corte anterior para comparar." />}
+          </div>
+        )}
+
+        {tab === "s12" && (
+          <div>
+            <SectionTitle n="12" title="Proyectos priorizados por el/la jefe/a URS" />
+            <ProyectosPriorizadosEditor regionId={regionId} rows={data.priorizados || []} fetcher={fetcher} onChanged={onDataChanged} />
           </div>
         )}
       </div>
@@ -1095,6 +1198,9 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           safeFetch("iral_resumen"),
           safeFetch("iral_nuevos"),
           safeFetch("cartera_critica"),
+          safeFetch("aporte_percapita"),
+          safeFetch("deuda_flotante_detalle"),
+          safeFetch("proyectos_priorizados"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -1103,7 +1209,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData, carteraCriticaData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData, carteraCriticaData, percapitaData, deudaDetalleData, priorizadosData] = clean;
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -1155,6 +1261,13 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             s6funcionarios: viatFuncData.filter(f => f.region_id === r.id).sort((a, b) => b.monto - a.monto).map(f => ({ nombre: f.funcionario, monto: f.monto, n: f.n_viaticos, esJefe: f.es_jefe })),
             s4data: acuerdosData.filter(a => a.region_id === r.id),
             s3data: carteraCriticaData.filter(c => c.region_id === r.id),
+            percapita: (() => {
+              const map = {};
+              percapitaData.filter(p => p.region_id === r.id).forEach(p => { map[p.comuna.toUpperCase()] = p.aporte_percapita; });
+              return map;
+            })(),
+            deudaDetalle: deudaDetalleData.filter(d => d.region_id === r.id),
+            priorizados: priorizadosData.filter(p => p.region_id === r.id),
             s5data: coberturaData.filter(c => c.region_id === r.id).sort((a, b) => new Date(b.fecha_visita) - new Date(a.fecha_visita)),
             s9radar: radarData.filter(x => x.region_id === r.id).map(x => ({ estado: x.estado, periodo: x.periodo, orden: x.orden_periodo, n: x.n_proyectos, nuevos: x.n_nuevos })),
             s10: (() => {

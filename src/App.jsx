@@ -578,7 +578,7 @@ function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) 
   );
 }
 
-function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false }) {
+function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false, compararActivo = true }) {
   const filas = rows.filter(r => r.programa === programa && r.tipo === tipo && (r.vista || "mensual") === vista).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
   const fechas = filas.map(r => r.corte_fecha);
   const [m1, setM1] = useState(fechas[1] || fechas[0] || "");
@@ -594,6 +594,30 @@ function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false }
 
   const r1 = filas.find(r => r.corte_fecha === m1);
   const r2 = filas.find(r => r.corte_fecha === m2);
+
+  if (!compararActivo) {
+    // Vista simple: solo el corte más reciente, sin comparación
+    const latest = filas[0];
+    return (
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+        <div style={{ fontWeight: 700, color: NAVY, marginBottom: 8, fontSize: 13 }}>{programa} — {latest.corte_fecha}</div>
+        <div style={{ display: "flex", gap: 20 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, color: "#999" }}>Técnica</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: NAVY }}>{latest.real_tecnica ?? "—"}d</div>
+            <div style={{ fontSize: 11, color: "#666" }}>Meta {latest.meta_tecnica ?? "—"}d</div>
+          </div>
+          {showFinanciera && (
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#999" }}>Financiera</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: NAVY }}>{latest.real_financiera ?? "—"}d</div>
+              <div style={{ fontSize: 11, color: "#666" }}>Meta {latest.meta_financiera ?? "—"}d</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
@@ -774,6 +798,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [soloPmuPmb, setSoloPmuPmb] = useState(false);
   const [vista7a, setVista7a] = useState("mensual");
   const [vista7b, setVista7b] = useState("mensual");
+  const [compararMeses, setCompararMeses] = useState(true);
   const tabs = [
     ["resumen", "Resumen"],
     ["s2", "2. Rendición"],
@@ -989,14 +1014,20 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
 
         {tab === "s7" && (
           <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, background: "#EAF1F6", padding: "8px 12px", borderRadius: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_SOFT }}>Comparar meses:</span>
+              <button onClick={() => setCompararMeses(true)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: compararMeses ? NAVY : "white", color: compararMeses ? "white" : NAVY }}>Activado</button>
+              <button onClick={() => setCompararMeses(false)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: !compararMeses ? NAVY : "white", color: !compararMeses ? "white" : NAVY }}>Desactivado (solo mes actual)</button>
+            </div>
+
             <SectionTitle n="7A" title="Tiempo de evaluación de proyectos (pre-aprobación)" />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_SOFT }}>Vista:</span>
               <button onClick={() => setVista7a("mensual")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7a === "mensual" ? NAVY : "white", color: vista7a === "mensual" ? "white" : NAVY }}>Mensual</button>
               <button onClick={() => setVista7a("acumulado")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7a === "acumulado" ? NAVY : "white", color: vista7a === "acumulado" ? "white" : NAVY }}>Acumulado</button>
             </div>
-            <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="evaluacion" vista={vista7a} showFinanciera={false} />
-            <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="evaluacion" vista={vista7a} showFinanciera={false} />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
             <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación — vista {vista7a} (PMU y PMB):</div>
             <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} />
 
@@ -1006,8 +1037,8 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               <button onClick={() => setVista7b("mensual")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7b === "mensual" ? NAVY : "white", color: vista7b === "mensual" ? "white" : NAVY }}>Mensual</button>
               <button onClick={() => setVista7b("acumulado")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: vista7b === "acumulado" ? NAVY : "white", color: vista7b === "acumulado" ? "white" : NAVY }}>Acumulado</button>
             </div>
-            <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="rendicion" vista={vista7b} showFinanciera={true} />
-            <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="rendicion" vista={vista7b} showFinanciera={true} />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
+            <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
             <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de rendición — vista {vista7b} (PMU y PMB):</div>
             <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} />
           </div>
@@ -1031,8 +1062,8 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                 {data.deudaDetalle && data.deudaDetalle.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 6 }}>Expedientes pendientes de transferir, en bandeja URS</div>
-                    <Table headers={["Expediente", "Comuna", "Monto ($M)", "2ª cuota"]}
-                      rows={data.deudaDetalle.map(d => [d.expediente || "—", d.comuna, fmtM(d.monto / 1e6), d.segunda_cuota ? <Pill tone="warn">Sí</Pill> : "No"])} />
+                    <Table headers={["Expediente", "Comuna", "Proyecto", "Código", "Programa", "Monto ($M)", "2ª cuota"]}
+                      rows={data.deudaDetalle.map(d => [d.expediente || "—", d.comuna, d.nombre_proyecto || <span style={{ color: "#999" }}>(sin nombre — código: {d.codigo_proyecto || "—"})</span>, d.codigo_proyecto || "—", d.programa || "—", fmtM(d.monto / 1e6), d.segunda_cuota ? <Pill tone="warn">Sí</Pill> : "No"])} />
                   </div>
                 )}
               </div>

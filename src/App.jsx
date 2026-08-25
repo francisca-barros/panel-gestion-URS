@@ -1427,7 +1427,7 @@ function PanelURSInner() {
         </div>
 
         <div style={{ background: AMBER_BG, border: "1px solid #F0D48A", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12.5, color: AMBER_TXT }}>
-          ⏳ 13 regiones restantes sin datos aún — este panel muestra solo lo verificado. No representa el estado nacional.
+          ⏳ Cobertura desigual entre regiones: todas tienen datos de rendición (S2), pero PMU/PMB (S7), viáticos (S6), deuda flotante (S8) e IRAL (S10) solo están cargados para Valparaíso, Atacama y Magallanes por ahora.
         </div>
 
         {warnings.length > 0 && (

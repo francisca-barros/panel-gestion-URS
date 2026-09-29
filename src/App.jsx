@@ -553,8 +553,10 @@ function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) 
           <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 12.5 }}>
             <span style={{ flex: 1, fontWeight: 700 }}>{r.programa}</span>
             <span style={{ flex: 1, color: "#666" }}>{r.corte_fecha}</span>
-            <span style={{ flex: 1 }}>Téc: {r.meta_tecnica ?? "—"}/{r.real_tecnica ?? "—"}</span>
-            <span style={{ flex: 1 }}>Fin: {r.meta_financiera ?? "—"}/{r.real_financiera ?? "—"}</span>
+            <span style={{ flex: 1 }}>Téc — Meta: <b>{r.meta_tecnica ?? "—"}</b> · Real: <b>{r.real_tecnica ?? "—"}</b></span>
+            {(r.meta_financiera != null || r.real_financiera != null) && (
+              <span style={{ flex: 1 }}>Fin — Meta: <b>{r.meta_financiera ?? "—"}</b> · Real: <b>{r.real_financiera ?? "—"}</b></span>
+            )}
             <button onClick={() => removeRow(r.id)} style={{ border: "none", background: "transparent", color: RED, cursor: "pointer" }}>✕</button>
           </div>
         ))}
@@ -570,6 +572,66 @@ function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) 
           <input placeholder="Meta fin." type="number" step="0.1" value={form.meta_financiera} onChange={e => setForm({ ...form, meta_financiera: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
           <input placeholder="Real fin." type="number" step="0.1" value={form.real_financiera} onChange={e => setForm({ ...form, real_financiera: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
         </>}
+        <button onClick={addRow} disabled={busy || !form.corte_fecha} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: busy ? "white" : NAVY, color: busy ? "#999" : "white", fontWeight: 700, fontSize: 12, cursor: busy ? "default" : "pointer" }}>
+          {busy ? "..." : "+ Agregar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function IralResumenEditor({ regionId, rows, fetcher, onChanged }) {
+  const [form, setForm] = useState({ programa: "PMU", n_proyectos: "", monto: "", n_revision_urs: "", corte_fecha: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const filas = [...rows].sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
+
+  async function addRow() {
+    if (!form.corte_fecha) return;
+    setBusy(true); setErr(null);
+    try {
+      await fetcher.insertRow("iral_resumen", {
+        region_id: regionId, programa: form.programa,
+        n_proyectos: form.n_proyectos === "" ? null : Number(form.n_proyectos),
+        monto: form.monto === "" ? null : Number(form.monto),
+        n_revision_urs: form.n_revision_urs === "" ? null : Number(form.n_revision_urs),
+        corte_fecha: form.corte_fecha,
+      });
+      setForm({ ...form, n_proyectos: "", monto: "", n_revision_urs: "", corte_fecha: "" });
+      onChanged();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function removeRow(id) {
+    try { await fetcher.deleteRow("iral_resumen", id); onChanged(); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Editar / agregar cortes IRAL</div>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, overflow: "hidden", marginBottom: 10 }}>
+        {filas.length === 0 && <div style={{ padding: 12, fontSize: 12.5, color: "#888" }}>Sin registros todavía.</div>}
+        {filas.map(r => (
+          <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 12.5 }}>
+            <span style={{ flex: 1, fontWeight: 700 }}>{r.programa}</span>
+            <span style={{ flex: 1, color: "#666" }}>{r.corte_fecha}</span>
+            <span style={{ flex: 1 }}>N° proyectos: <b>{r.n_proyectos ?? "—"}</b></span>
+            <span style={{ flex: 1 }}>Monto: <b>{r.monto != null ? fmtM(r.monto / 1000) + "M" : "—"}</b></span>
+            <span style={{ flex: 1 }}>En Revisión URS: <b>{r.n_revision_urs ?? "—"}</b></span>
+            <button onClick={() => removeRow(r.id)} style={{ border: "none", background: "transparent", color: RED, cursor: "pointer" }}>✕</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", background: LIGHTGRAY, padding: 10, borderRadius: 8 }}>
+        <select value={form.programa} onChange={e => setForm({ ...form, programa: e.target.value })} style={{ padding: 5, borderRadius: 4, fontSize: 12 }}>
+          <option value="PMU">PMU (Tradicional)</option><option value="PMB">PMB Tradicional</option>
+        </select>
+        <input type="date" value={form.corte_fecha} onChange={e => setForm({ ...form, corte_fecha: e.target.value })} style={{ padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        <input placeholder="N° proyectos" type="number" value={form.n_proyectos} onChange={e => setForm({ ...form, n_proyectos: e.target.value })} style={{ width: 100, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        <input placeholder="Monto ($)" type="number" value={form.monto} onChange={e => setForm({ ...form, monto: e.target.value })} style={{ width: 110, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
+        <input placeholder="En Revisión URS" type="number" value={form.n_revision_urs} onChange={e => setForm({ ...form, n_revision_urs: e.target.value })} style={{ width: 110, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
         <button onClick={addRow} disabled={busy || !form.corte_fecha} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: busy ? "white" : NAVY, color: busy ? "#999" : "white", fontWeight: 700, fontSize: 12, cursor: busy ? "default" : "pointer" }}>
           {busy ? "..." : "+ Agregar"}
         </button>
@@ -1096,30 +1158,32 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             {data.s10 ? (
               <div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
-                  Fuente: planilla IRAL (líneas Tradicional=PMU y PMB Tradicional=PMB), corte 20-ago-2026, comparado contra 31-jul-2026.
+                  Resumen con el corte más reciente cargado por programa (ver abajo para editar u otros cortes).
                 </div>
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 }}>ALERTAS</div>
                   {data.s10.resumen.map((r, i) => (
                     <div key={i} style={{ background: LIGHTGRAY, borderRadius: 6, padding: "8px 12px", marginBottom: 6, fontSize: 13, color: NAVY_SOFT }}>
-                      {r.n} proyectos acumulados postulados por la línea {r.programa === "PMU" ? "Tradicional (PMU)" : "PMB Tradicional"} → {r.revision} {r.revision === 1 ? "se encuentra" : "se encuentran"} en Revisión URS
+                      {r.n} proyectos acumulados postulados por la línea {r.programa === "PMU" ? "Tradicional (PMU)" : "PMB Tradicional"} (corte {r.corteFecha}) → {r.revision} {r.revision === 1 ? "se encuentra" : "se encuentran"} en Revisión URS
                     </div>
                   ))}
                   {data.s10.nuevos.map((n, i) => (
                     <div key={"n" + i} style={{ background: GREEN_BG, borderRadius: 6, padding: "8px 12px", marginBottom: 6, fontSize: 13, color: GREEN_TXT, fontWeight: 600 }}>
-                      ℹ️ 1 proyecto IRAL nuevo postulado en agosto: {n.comuna} — {n.programa} — {fmtM(n.monto / 1000)}M ({n.idp})
+                      ℹ️ Proyecto IRAL nuevo: {n.comuna} — {n.programa} — {fmtM(n.monto / 1000)}M ({n.idp})
                     </div>
                   ))}
                   {data.s10.nuevos.length === 0 && (
                     <div style={{ background: LIGHTGRAY, borderRadius: 6, padding: "8px 12px", fontSize: 13, color: "#888" }}>
-                      Sin proyectos IRAL nuevos postulados en agosto.
+                      Sin proyectos IRAL nuevos registrados.
                     </div>
                   )}
                 </div>
-                <Table headers={["Programa", "N° proyectos", "Monto"]}
-                  rows={data.s10.resumen.map(r => [r.programa === "PMU" ? "PMU Tradicional" : "PMB Tradicional", r.n, fmtM(r.monto / 1000) + "M"])} />
+                <Table headers={["Programa", "N° proyectos", "Monto", "Corte"]}
+                  rows={data.s10.resumen.map(r => [r.programa === "PMU" ? "PMU Tradicional" : "PMB Tradicional", r.n, fmtM(r.monto / 1000) + "M", r.corteFecha])} />
               </div>
             ) : <Pending text="Sin fuente identificada para esta región." />}
+            <div style={{ height: 18 }} />
+            <IralResumenEditor regionId={regionId} rows={data.s10raw || []} fetcher={fetcher} onChanged={onDataChanged} />
           </div>
         )}
 
@@ -1301,9 +1365,17 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             priorizados: priorizadosData.filter(p => p.region_id === r.id),
             s5data: coberturaData.filter(c => c.region_id === r.id).sort((a, b) => new Date(b.fecha_visita) - new Date(a.fecha_visita)),
             s9radar: radarData.filter(x => x.region_id === r.id).map(x => ({ estado: x.estado, periodo: x.periodo, orden: x.orden_periodo, n: x.n_proyectos, nuevos: x.n_nuevos })),
+            s10raw: iralResumenData.filter(x => x.region_id === r.id),
             s10: (() => {
-              const resumen = iralResumenData.filter(x => x.region_id === r.id).map(x => ({ programa: x.programa, n: x.n_proyectos, monto: x.monto, revision: x.n_revision_urs }));
-              if (resumen.length === 0) return null;
+              const raw = iralResumenData.filter(x => x.region_id === r.id);
+              if (raw.length === 0) return null;
+              // Para el resumen/alertas se usa el corte más reciente por programa.
+              const porPrograma = {};
+              raw.forEach(x => {
+                const prev = porPrograma[x.programa];
+                if (!prev || new Date(x.corte_fecha) > new Date(prev.corte_fecha)) porPrograma[x.programa] = x;
+              });
+              const resumen = Object.values(porPrograma).map(x => ({ programa: x.programa, n: x.n_proyectos, monto: x.monto, revision: x.n_revision_urs, corteFecha: x.corte_fecha }));
               const nuevos = iralNuevosData.filter(x => x.region_id === r.id).map(x => ({ idp: x.id_proyecto, comuna: x.comuna, programa: x.programa, monto: x.monto, estado: x.estado, nombre: x.nombre_proyecto }));
               return { resumen, nuevos };
             })(),

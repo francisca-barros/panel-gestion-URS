@@ -976,7 +976,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             </div>
             {data.comunasTodos && data.comunasTodos.length > 0 && (
               <div style={{ fontSize: 11.5, color: "#666", marginBottom: 10 }}>
-                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa), corte 21-ago-2026. Numerador = saldo con Fecha Fin de Actividades vencida{soloPmuPmb ? " (solo PMU/PMB)" : " (todos los programas)"}; denominador = transferido de todos los proyectos{soloPmuPmb ? " PMU/PMB" : ""} de la región (vigentes + vencidos). Misma fuente y fórmula para las 3 regiones y ambas vistas.
+                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa){data.comunasCorteFecha ? `, corte ${data.comunasCorteFecha}` : ""}. Numerador = saldo con Fecha Fin de Actividades vencida y saldo &gt; 0{soloPmuPmb ? " (solo PMU/PMB)" : " (todos los programas)"}; denominador = transferido de todos los proyectos{soloPmuPmb ? " PMU/PMB" : ""} de la región (vigentes + vencidos).
               </div>
             )}
 
@@ -1316,6 +1316,10 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             ciclo: r.ciclo, primeraVez: r.primera_vez,
             comunasTodos: comData.filter(c => c.region_id === r.id && (c.grupo_programa || "TODOS") === "TODOS").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, c.n_proyectos_numerador, c.n_proyectos_denominador]),
             comunasPmuPmb: comData.filter(c => c.region_id === r.id && c.grupo_programa === "PMU_PMB").map(c => [c.comuna, c.transferido_m, c.saldo_pendiente_m, c.pct_deuda, c.n_proyectos_numerador, c.n_proyectos_denominador]),
+            comunasCorteFecha: (() => {
+              const row = comData.find(c => c.region_id === r.id && c.corte_fecha);
+              return row ? row.corte_fecha : null;
+            })(),
             s2regional: null,
             s3: null,
             s7raw: indData.filter(i => i.region_id === r.id),

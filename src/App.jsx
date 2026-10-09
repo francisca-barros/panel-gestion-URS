@@ -271,7 +271,8 @@ function RendCard({ label, data }) {
 }
 
 function DonutMini({ cerrados, enEjecucion, otros, total }) {
-  const pC = (cerrados / total) * 100, pE = (enEjecucion / total) * 100, pO = (otros / total) * 100;
+  const t = total > 0 ? total : 1;
+  const pC = (cerrados / t) * 100, pE = (enEjecucion / t) * 100, pO = (otros / t) * 100;
   const seg = (start, val, color) => {
     const circumference = 2 * Math.PI * 40;
     const len = (val / 100) * circumference;
@@ -280,10 +281,72 @@ function DonutMini({ cerrados, enEjecucion, otros, total }) {
   };
   return (
     <svg width="110" height="110" viewBox="0 0 100 100">
+      <circle r="40" cx="50" cy="50" fill="transparent" stroke={LIGHTGRAY} strokeWidth="16" />
       {seg(0, pC, TEAL)}
       {seg(pC, pE, "#3B82C4")}
       {seg(pC + pE, pO, GRAYBLUE)}
     </svg>
+  );
+}
+
+function pctS9(v, total, d) {
+  return total > 0 ? ((v / total) * 100).toFixed(d) : "0";
+}
+
+function CapacidadEditor({ regionId, s9, fetcher, onChanged }) {
+  const [form, setForm] = useState({ cerrados: "", en_ejecucion: "", otros: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [ok, setOk] = useState(false);
+
+  // Al cambiar de región o recargar datos, el formulario parte con lo guardado.
+  useEffect(() => {
+    setForm({ cerrados: String(s9.cerrados ?? 0), en_ejecucion: String(s9.enEjecucion ?? 0), otros: String(s9.otros ?? 0) });
+    setOk(false); setErr(null);
+    // eslint-disable-next-line
+  }, [regionId, s9.cerrados, s9.enEjecucion, s9.otros]);
+
+  const n = (v) => (v === "" || isNaN(Number(v)) ? 0 : Math.max(0, Math.round(Number(v))));
+  const c = n(form.cerrados), e = n(form.en_ejecucion), o = n(form.otros);
+  const total = c + e + o;
+
+  async function guardar() {
+    setBusy(true); setErr(null); setOk(false);
+    const vals = { total, cerrados: c, en_ejecucion: e, otros: o };
+    try {
+      // 1) intenta actualizar la fila de esta región
+      const upd = await fetcher.updateWhere("capacidad_cartera", `region_id=eq.${encodeURIComponent(regionId)}`, vals);
+      if (!Array.isArray(upd) || upd.length === 0) {
+        // 2) si no existe, la crea; si la tabla exige corte_fecha, reintenta con la fecha de hoy
+        try {
+          await fetcher.insertRow("capacidad_cartera", { region_id: regionId, ...vals });
+        } catch (e1) {
+          if (/corte_fecha/i.test(e1.message)) {
+            await fetcher.insertRow("capacidad_cartera", { region_id: regionId, ...vals, corte_fecha: new Date().toISOString().slice(0, 10) });
+          } else throw e1;
+        }
+      }
+      setOk(true);
+      onChanged();
+    } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
+  }
+
+  const inp = { width: 110, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` };
+  return (
+    <div style={{ background: LIGHTGRAY, padding: 12, borderRadius: 8, marginBottom: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Editar capacidad de levantamiento (el gráfico se actualiza solo)</div>
+      {err && <div style={{ color: RED, fontSize: 12, marginBottom: 8 }}>Error: {err}</div>}
+      {ok && <div style={{ color: GREEN_TXT, fontSize: 12, marginBottom: 8 }}>Guardado.</div>}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ fontSize: 11.5, color: "#444" }}>Cerrados<br /><input type="number" min="0" value={form.cerrados} onChange={ev => setForm({ ...form, cerrados: ev.target.value })} style={inp} /></label>
+        <label style={{ fontSize: 11.5, color: "#444" }}>En ejecución<br /><input type="number" min="0" value={form.en_ejecucion} onChange={ev => setForm({ ...form, en_ejecucion: ev.target.value })} style={inp} /></label>
+        <label style={{ fontSize: 11.5, color: "#444" }}>Otros estados<br /><input type="number" min="0" value={form.otros} onChange={ev => setForm({ ...form, otros: ev.target.value })} style={inp} /></label>
+        <div style={{ fontSize: 12.5, color: NAVY }}>Cartera total (suma): <b>{total.toLocaleString("es-CL")}</b></div>
+        <button onClick={guardar} disabled={busy} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: busy ? "white" : NAVY, color: busy ? "#999" : "white", fontWeight: 700, fontSize: 12, cursor: busy ? "default" : "pointer" }}>
+          {busy ? "..." : "Guardar"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -939,9 +1002,9 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               <div style={{ flex: 1, minWidth: 200, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
                 <DonutMini {...data.s9} />
                 <div style={{ fontSize: 12 }}>
-                  <div><span style={{ color: TEAL, fontWeight: 700 }}>●</span> Cerrados {(data.s9.cerrados / data.s9.total * 100).toFixed(0)}%</div>
-                  <div><span style={{ color: "#3B82C4", fontWeight: 700 }}>●</span> En ejecución {(data.s9.enEjecucion / data.s9.total * 100).toFixed(0)}%</div>
-                  <div><span style={{ color: GRAYBLUE, fontWeight: 700 }}>●</span> Otros {(data.s9.otros / data.s9.total * 100).toFixed(0)}%</div>
+                  <div><span style={{ color: TEAL, fontWeight: 700 }}>●</span> Cerrados {pctS9(data.s9.cerrados, data.s9.total, 0)}%</div>
+                  <div><span style={{ color: "#3B82C4", fontWeight: 700 }}>●</span> En ejecución {pctS9(data.s9.enEjecucion, data.s9.total, 0)}%</div>
+                  <div><span style={{ color: GRAYBLUE, fontWeight: 700 }}>●</span> Otros {pctS9(data.s9.otros, data.s9.total, 0)}%</div>
                 </div>
               </div>
               <div style={{ flex: 1, minWidth: 200, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 16 }}>
@@ -1136,13 +1199,14 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
         {tab === "s9" && (
           <div>
             <SectionTitle n="9" title="Capacidad de levantamiento de proyectos" />
+            <CapacidadEditor regionId={regionId} s9={data.s9} fetcher={fetcher} onChanged={onDataChanged} />
             <div style={{ display: "flex", gap: 20, alignItems: "center", marginBottom: 14 }}>
               <DonutMini {...data.s9} />
               <Table headers={["Categoría", "N° proyectos", "%"]} rows={[
                 ["Cartera total", data.s9.total, "100,0%"],
-                ["Cerrados", data.s9.cerrados, (data.s9.cerrados / data.s9.total * 100).toFixed(1) + "%"],
-                ["En ejecución", data.s9.enEjecucion, (data.s9.enEjecucion / data.s9.total * 100).toFixed(1) + "%"],
-                ["Otros estados", data.s9.otros, (data.s9.otros / data.s9.total * 100).toFixed(1) + "%"],
+                ["Cerrados", data.s9.cerrados, pctS9(data.s9.cerrados, data.s9.total, 1) + "%"],
+                ["En ejecución", data.s9.enEjecucion, pctS9(data.s9.enEjecucion, data.s9.total, 1) + "%"],
+                ["Otros estados", data.s9.otros, pctS9(data.s9.otros, data.s9.total, 1) + "%"],
               ]} />
             </div>
             <Pending text="'En creación municipal' sigue sin fuente en el Excel de cartera." />
@@ -1246,12 +1310,20 @@ function makeSupabaseFetcher(url, key) {
     return res.json();
   }
 
+  async function updateWhere(table, filter, patch) {
+    const res = await fetch(`${base}/rest/v1/${table}?${filter}`, {
+      method: "PATCH", headers: { ...headers, Prefer: "return=representation" }, body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  }
+
   async function deleteRow(table, id) {
     const res = await fetch(`${base}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers });
     if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
 
-  return { fetchTable, insertRow, updateRow, deleteRow };
+  return { fetchTable, insertRow, updateRow, updateWhere, deleteRow };
 }
 
 // ---------- Carga de datos desde Supabase (reemplaza el REGIONS hardcodeado) ----------

@@ -22,8 +22,8 @@ const REGIONS = {
     ciclo: "Bilateral 28/07/2026 (2ª medición del ciclo)",
     primeraVez: false,
     s2regional: [
-      { corte: "27-jul-2026", transferido: 34960, pendiente: 12944, pct: 37.0 },
-      { corte: "27-feb-2026", transferido: 45797, pendiente: 23849, pct: 52.1 },
+      { corte: "27-07-2026", transferido: 34960, pendiente: 12944, pct: 37.0 },
+      { corte: "27-02-2026", transferido: 45797, pendiente: 23849, pct: 52.1 },
     ],
     comunas: [
       ["Valparaíso", 4110.5, 2248.8, 54.71],
@@ -239,14 +239,38 @@ function EvalRow({ label, meta, real }) {
   );
 }
 
-function DeltaBadge({ curr, prev }) {
+// ---------- Fechas: siempre dd-mm-aaaa en pantalla ----------
+const MESES_ES = { ene: "01", feb: "02", mar: "03", abr: "04", may: "05", jun: "06", jul: "07", ago: "08", sep: "09", sept: "09", oct: "10", nov: "11", dic: "12" };
+// Acepta "2026-09-30" (o con hora) y "30-sep-2026"; cualquier otro texto se deja igual.
+const fmtFecha = (v) => {
+  if (v === null || v === undefined || v === "") return v;
+  const t = String(v).trim();
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = t.match(/^(\d{1,2})-([A-Za-z]{3,4})-(\d{4})$/);
+  if (m && MESES_ES[m[2].toLowerCase()]) return `${m[1].padStart(2, "0")}-${MESES_ES[m[2].toLowerCase()]}-${m[3]}`;
+  return t;
+};
+// Texto libre con fechas incrustadas ("corte 20-ago-2026") -> dd-mm-aaaa
+const fmtFechasEnTexto = (txt) => String(txt).replace(/\b(\d{1,2})-(ene|feb|mar|abr|may|jun|jul|ago|sept|sep|oct|nov|dic)-(\d{4})\b/gi, (_, d, mes, y) => `${d.padStart(2, "0")}-${MESES_ES[mes.toLowerCase()]}-${y}`);
+// true solo si b cae en el mes calendario inmediatamente siguiente a a
+const sonMesesConsecutivos = (a, b) => {
+  const ma = String(a || "").match(/^(\d{4})-(\d{2})/), mb = String(b || "").match(/^(\d{4})-(\d{2})/);
+  if (!ma || !mb) return false;
+  return (Number(mb[1]) * 12 + Number(mb[2])) - (Number(ma[1]) * 12 + Number(ma[2])) === 1;
+};
+
+// currDate / prevDate: fechas de corte (aaaa-mm-dd). "vs. mes pasado" solo si son meses consecutivos;
+// en otro caso se indica la fecha del corte con el que se compara.
+function DeltaBadge({ curr, prev, currDate, prevDate }) {
   if (prev === null || prev === undefined) return <span style={{ fontSize: 11, color: "#999" }}>sin corte anterior</span>;
   const diff = curr - prev;
-  if (Math.abs(diff) < 0.05) return <span style={{ fontSize: 11, color: "#888" }}>≈ igual que el mes pasado</span>;
+  const ref = !prevDate ? "corte anterior" : sonMesesConsecutivos(prevDate, currDate) ? "mes pasado" : fmtFecha(prevDate);
+  if (Math.abs(diff) < 0.05) return <span style={{ fontSize: 11, color: "#888" }}>≈ igual que {ref === "corte anterior" || ref === "mes pasado" ? "el " + ref : ref}</span>;
   const faster = diff < 0; // menos días = más rápido
   return (
     <span style={{ fontSize: 11, fontWeight: 700, color: faster ? GREEN_TXT : RED }}>
-      {faster ? "▼" : "▲"} {Math.abs(diff).toFixed(1)}d {faster ? "más rápido" : "más lento"} vs. mes pasado ({prev.toFixed(1)}d)
+      {faster ? "▼" : "▲"} {Math.abs(diff).toFixed(1)}d {faster ? "más rápido" : "más lento"} vs. {ref} ({prev.toFixed(1)}d)
     </span>
   );
 }
@@ -260,12 +284,12 @@ function RendCard({ label, data }) {
         <span>Técnica</span><span>Meta {data.metaT.toFixed(1)}d</span>
       </div>
       <div style={{ fontSize: 20, fontWeight: 800, color: okT ? GREEN_TXT : RED }}>{data.realT.toFixed(1)} días</div>
-      <div style={{ marginBottom: 10 }}><DeltaBadge curr={data.realT} prev={data.prevRealT} /></div>
+      <div style={{ marginBottom: 10 }}><DeltaBadge curr={data.realT} prev={data.prevRealT} currDate={data.corteFecha} prevDate={data.corteFechaPrev} /></div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4, color: "#666" }}>
         <span>Financiera</span><span>Meta {data.metaF.toFixed(1)}d</span>
       </div>
       <div style={{ fontSize: 20, fontWeight: 800, color: okF ? GREEN_TXT : RED }}>{data.realF.toFixed(1)} días</div>
-      <div><DeltaBadge curr={data.realF} prev={data.prevRealF} /></div>
+      <div><DeltaBadge curr={data.realF} prev={data.prevRealF} currDate={data.corteFecha} prevDate={data.corteFechaPrev} /></div>
     </div>
   );
 }
@@ -413,7 +437,7 @@ function CoberturaEditor({ regionId, rows, fetcher, onChanged, comunasCanonicas 
         {rows.map((v) => (
           <div key={v.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 13 }}>
             <span style={{ flex: 2, fontWeight: 600 }}>{v.comuna}</span>
-            <span style={{ flex: 1, color: "#666", fontSize: 12 }}>{v.fecha_visita}</span>
+            <span style={{ flex: 1, color: "#666", fontSize: 12 }}>{fmtFecha(v.fecha_visita)}</span>
             <span style={{ flex: 1.5, color: "#666", fontSize: 12 }}>{v.visitado_por || "—"}</span>
             <span style={{ flex: 2, color: "#888", fontSize: 12 }}>{v.notas || ""}</span>
             <button onClick={() => removeRow(v.id)} style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 14 }}>✕</button>
@@ -483,7 +507,7 @@ function RadarProyectos({ rows }) {
     <div>
       {linkButton}
       <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
-        Fuente: captura del reporte "Radar de Proyectos por Mes" (Looker Studio), corte 20-ago-2026. No incrustado en vivo — se actualiza cuando se comparte una nueva captura.
+        Fuente: captura del reporte "Radar de Proyectos por Mes" (Looker Studio), corte 20-08-2026. No incrustado en vivo — se actualiza cuando se comparte una nueva captura.
       </div>
       {alerts.length > 0 && (
         <div style={{ marginBottom: 14 }}>
@@ -554,7 +578,7 @@ function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) 
         {filas.map(r => (
           <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 12.5 }}>
             <span style={{ flex: 1, fontWeight: 700 }}>{r.programa}</span>
-            <span style={{ flex: 1, color: "#666" }}>{r.corte_fecha}</span>
+            <span style={{ flex: 1, color: "#666" }}>{fmtFecha(r.corte_fecha)}</span>
             <span style={{ flex: 1 }}>Téc — Meta: <b>{r.meta_tecnica ?? "—"}</b> · Real: <b>{r.real_tecnica ?? "—"}</b></span>
             {(r.meta_financiera != null || r.real_financiera != null) && (
               <span style={{ flex: 1 }}>Fin — Meta: <b>{r.meta_financiera ?? "—"}</b> · Real: <b>{r.real_financiera ?? "—"}</b></span>
@@ -618,7 +642,7 @@ function IralResumenEditor({ regionId, rows, fetcher, onChanged }) {
         {filas.map(r => (
           <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${LIGHTGRAY}`, fontSize: 12.5 }}>
             <span style={{ flex: 1, fontWeight: 700 }}>{r.programa}</span>
-            <span style={{ flex: 1, color: "#666" }}>{r.corte_fecha}</span>
+            <span style={{ flex: 1, color: "#666" }}>{fmtFecha(r.corte_fecha)}</span>
             <span style={{ flex: 1 }}>N° proyectos: <b>{r.n_proyectos ?? "—"}</b></span>
             <span style={{ flex: 1 }}>Monto: <b>{r.monto != null ? fmtM(r.monto / 1000) + "M" : "—"}</b></span>
             <span style={{ flex: 1 }}>En Revisión URS: <b>{r.n_revision_urs ?? "—"}</b></span>
@@ -664,7 +688,7 @@ function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false, 
     const latest = filas[0];
     return (
       <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
-        <div style={{ fontWeight: 700, color: NAVY, marginBottom: 8, fontSize: 13 }}>{programa} — {latest.corte_fecha}</div>
+        <div style={{ fontWeight: 700, color: NAVY, marginBottom: 8, fontSize: 13 }}>{programa} — {fmtFecha(latest.corte_fecha)}</div>
         <div style={{ display: "flex", gap: 20 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 10, color: "#999" }}>Técnica</div>
@@ -689,46 +713,46 @@ function ComparadorMeses({ rows, programa, tipo, vista, showFinanciera = false, 
         <span style={{ fontWeight: 700, color: NAVY }}>{programa}</span>
         <span>Comparar:</span>
         <select value={m1} onChange={e => setM1(e.target.value)} style={{ padding: 4, borderRadius: 4 }}>
-          {fechas.map(f => <option key={f} value={f}>{f}</option>)}
+          {fechas.map(f => <option key={f} value={f}>{fmtFecha(f)}</option>)}
         </select>
         <span>vs.</span>
         <select value={m2} onChange={e => setM2(e.target.value)} style={{ padding: 4, borderRadius: 4 }}>
-          {fechas.map(f => <option key={f} value={f}>{f}</option>)}
+          {fechas.map(f => <option key={f} value={f}>{fmtFecha(f)}</option>)}
         </select>
       </div>
       {r1 && r2 ? (
         <div>
           <div style={{ display: "flex", gap: 20, marginBottom: showFinanciera ? 10 : 0 }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, color: "#999" }}>Técnica — {m1}</div>
+              <div style={{ fontSize: 10, color: "#999" }}>Técnica — {fmtFecha(m1)}</div>
               <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r1.real_tecnica ?? "—"}d</div>
               <div style={{ fontSize: 11, color: "#666" }}>Meta {r1.meta_tecnica ?? "—"}d</div>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, color: "#999" }}>Técnica — {m2}</div>
+              <div style={{ fontSize: 10, color: "#999" }}>Técnica — {fmtFecha(m2)}</div>
               <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r2.real_tecnica ?? "—"}d</div>
               <div style={{ fontSize: 11, color: "#666" }}>Meta {r2.meta_tecnica ?? "—"}d</div>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 10, color: "#999" }}>Variación técnica</div>
-              {r1.real_tecnica !== null && r2.real_tecnica !== null ? <DeltaBadge curr={r2.real_tecnica} prev={r1.real_tecnica} /> : "—"}
+              {r1.real_tecnica !== null && r2.real_tecnica !== null ? <DeltaBadge curr={r2.real_tecnica} prev={r1.real_tecnica} currDate={m2} prevDate={m1} /> : "—"}
             </div>
           </div>
           {showFinanciera && (
             <div style={{ display: "flex", gap: 20, borderTop: `1px solid ${LIGHTGRAY}`, paddingTop: 10 }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, color: "#999" }}>Financiera — {m1}</div>
+                <div style={{ fontSize: 10, color: "#999" }}>Financiera — {fmtFecha(m1)}</div>
                 <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r1.real_financiera ?? "—"}d</div>
                 <div style={{ fontSize: 11, color: "#666" }}>Meta {r1.meta_financiera ?? "—"}d</div>
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, color: "#999" }}>Financiera — {m2}</div>
+                <div style={{ fontSize: 10, color: "#999" }}>Financiera — {fmtFecha(m2)}</div>
                 <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{r2.real_financiera ?? "—"}d</div>
                 <div style={{ fontSize: 11, color: "#666" }}>Meta {r2.meta_financiera ?? "—"}d</div>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 10, color: "#999" }}>Variación financiera</div>
-                {r1.real_financiera !== null && r2.real_financiera !== null ? <DeltaBadge curr={r2.real_financiera} prev={r1.real_financiera} /> : "—"}
+                {r1.real_financiera !== null && r2.real_financiera !== null ? <DeltaBadge curr={r2.real_financiera} prev={r1.real_financiera} currDate={m2} prevDate={m1} /> : "—"}
               </div>
             </div>
           )}
@@ -965,7 +989,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             </div>
             {data.comunasTodos && data.comunasTodos.length > 0 && (
               <div style={{ fontSize: 11.5, color: "#666", marginBottom: 10 }}>
-                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa){data.comunasCorteFecha ? `, corte ${data.comunasCorteFecha}` : ""}. Numerador = saldo con Fecha Fin de Actividades vencida y saldo &gt; 0{soloPmuPmb ? " (solo PMU/PMB)" : " (todos los programas)"}; denominador = transferido de todos los proyectos{soloPmuPmb ? " PMU/PMB" : ""} de la región (vigentes + vencidos).
+                Fuente: Sheet "Deuda Rendición" (Saldo Por Rendir / Fecha Fin de Actividades / Programa){data.comunasCorteFecha ? `, corte ${fmtFecha(data.comunasCorteFecha)}` : ""}. Numerador = saldo con Fecha Fin de Actividades vencida y saldo &gt; 0{soloPmuPmb ? " (solo PMU/PMB)" : " (todos los programas)"}; denominador = transferido de todos los proyectos{soloPmuPmb ? " PMU/PMB" : ""} de la región (vigentes + vencidos).
               </div>
             )}
 
@@ -973,7 +997,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               <>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>Nivel regional — evolución de cortes</div>
                 <Table headers={["Corte", "Transferido ($M)", "Pendiente rendición ($M)", "% Deuda"]}
-                  rows={data.s2regional.map(r => [r.corte, fmtM(r.transferido), fmtM(r.pendiente), <span style={{ color: pctColor(r.pct), fontWeight: 700 }}>{r.pct.toFixed(1)}%</span>])} />
+                  rows={data.s2regional.map(r => [fmtFecha(r.corte), fmtM(r.transferido), fmtM(r.pendiente), <span style={{ color: pctColor(r.pct), fontWeight: 700 }}>{r.pct.toFixed(1)}%</span>])} />
                 <div style={{ height: 16 }} />
               </>
             )}
@@ -1016,7 +1040,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             {data.s6 ? (
               <div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-                  Fuente: Estado de Ejecución del Gasto — Comisiones de Servicio, período {data.s6.periodo}.
+                  Fuente: Estado de Ejecución del Gasto — Comisiones de Servicio, período {fmtFechasEnTexto(fmtFecha(data.s6.periodo))}.
                 </div>
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
                   <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
@@ -1141,7 +1165,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                   <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 }}>ALERTAS</div>
                   {data.s10.resumen.map((r, i) => (
                     <div key={i} style={{ background: LIGHTGRAY, borderRadius: 6, padding: "8px 12px", marginBottom: 6, fontSize: 13, color: NAVY_SOFT }}>
-                      {r.n} proyectos acumulados postulados por la línea {r.programa === "PMU" ? "Tradicional (PMU)" : "PMB Tradicional"} (corte {r.corteFecha}) → {r.revision} {r.revision === 1 ? "se encuentra" : "se encuentran"} en Revisión URS
+                      {r.n} proyectos acumulados postulados por la línea {r.programa === "PMU" ? "Tradicional (PMU)" : "PMB Tradicional"} (corte {fmtFecha(r.corteFecha)}) → {r.revision} {r.revision === 1 ? "se encuentra" : "se encuentran"} en Revisión URS
                     </div>
                   ))}
                   {data.s10.nuevos.map((n, i) => (
@@ -1156,7 +1180,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                   )}
                 </div>
                 <Table headers={["Programa", "N° proyectos", "Monto", "Corte"]}
-                  rows={data.s10.resumen.map(r => [r.programa === "PMU" ? "PMU Tradicional" : "PMB Tradicional", r.n, fmtM(r.monto / 1000) + "M", r.corteFecha])} />
+                  rows={data.s10.resumen.map(r => [r.programa === "PMU" ? "PMU Tradicional" : "PMB Tradicional", r.n, fmtM(r.monto / 1000) + "M", fmtFecha(r.corteFecha)])} />
               </div>
             ) : <Pending text="Sin fuente identificada para esta región." />}
             <div style={{ height: 18 }} />

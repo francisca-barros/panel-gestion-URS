@@ -884,6 +884,8 @@ function ProyectosPriorizadosEditor({ regionId, rows, fetcher, onChanged }) {
 function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   const [tab, setTab] = useState("resumen");
   const [soloPmuPmb, setSoloPmuPmb] = useState(false);
+  // Orden de la tabla de comunas: col = índice del dato (0 comuna, 1 transferido, 2 saldo, 3 %deuda, 4 n° numerador, 5 n° denominador, 6 per cápita)
+  const [ordenCom, setOrdenCom] = useState({ col: 1, dir: "desc" });
   const [vista7a, setVista7a] = useState("mensual");
   const [vista7b, setVista7b] = useState("mensual");
   const [compararMeses, setCompararMeses] = useState(true);
@@ -911,6 +913,32 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
   }, [comunasActivas]);
 
   const rankedComunas = useMemo(() => [...comunasActivas].sort((a, b) => b[1] - a[1]), [comunasActivas]);
+
+  const percapitaDe = (c) => {
+    const v = data.percapita ? data.percapita[String(c[0]).toUpperCase()] : null;
+    return v === null || v === undefined || v === "" ? null : Number(v);
+  };
+  const comunasOrdenadas = useMemo(() => {
+    const { col, dir } = ordenCom;
+    const val = (c) => (col === 6 ? percapitaDe(c) : c[col]);
+    const mult = dir === "asc" ? 1 : -1;
+    return [...comunasActivas].sort((a, b) => {
+      const x = val(a), y = val(b);
+      const nx = x === null || x === undefined, ny = y === null || y === undefined;
+      if (nx && ny) return 0;
+      if (nx) return 1;   // los sin dato siempre al final
+      if (ny) return -1;
+      if (col === 0) return mult * String(x).localeCompare(String(y), "es");
+      return mult * (Number(x) - Number(y));
+    });
+    // eslint-disable-next-line
+  }, [comunasActivas, ordenCom, data.percapita]);
+  const cambiarOrden = (col) => setOrdenCom(o => o.col === col ? { col, dir: o.dir === "asc" ? "desc" : "asc" } : { col, dir: col === 0 ? "asc" : "desc" });
+  const CabeceraOrden = ({ col, children }) => (
+    <button onClick={() => cambiarOrden(col)} title="Ordenar" style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 600, fontSize: 12, color: "white" }}>
+      {children}<span style={{ opacity: ordenCom.col === col ? 1 : 0.45, fontSize: 10 }}>{ordenCom.col === col ? (ordenCom.dir === "asc" ? "▲" : "▼") : "⇅"}</span>
+    </button>
+  );
 
   return (
     <div>
@@ -1002,11 +1030,20 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               </>
             )}
             <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-              Nivel comunal — ordenado por monto transferido (mayor a menor). Fórmula corregida: denominador = todos los proyectos vencidos.
+              Nivel comunal — haz clic en el encabezado de una columna para ordenar de mayor a menor (o al revés al volver a hacer clic). Orden inicial: monto transferido, de mayor a menor.
             </div>
-            <Table headers={["#", "Comuna", "Transferido ($M)", "Saldo pendiente ($M)", "% Deuda", "N° proy. numerador", "N° proy. denominador", "Aporte per cápita (2021-2026)"]}
-              rows={rankedComunas.map((c, i) => {
-                const pc = data.percapita ? data.percapita[c[0].toUpperCase()] : null;
+            <Table headers={[
+                "#",
+                <CabeceraOrden col={0}>Comuna</CabeceraOrden>,
+                <CabeceraOrden col={1}>Transferido ($M)</CabeceraOrden>,
+                <CabeceraOrden col={2}>Saldo pendiente ($M)</CabeceraOrden>,
+                <CabeceraOrden col={3}>% Deuda</CabeceraOrden>,
+                <CabeceraOrden col={4}>N° proy. numerador</CabeceraOrden>,
+                <CabeceraOrden col={5}>N° proy. denominador</CabeceraOrden>,
+                <CabeceraOrden col={6}>Aporte per cápita (2021-2026)</CabeceraOrden>,
+              ]}
+              rows={comunasOrdenadas.map((c, i) => {
+                const pc = percapitaDe(c);
                 return [i + 1, c[0], fmtM(c[1]), fmtM(c[2]), <span style={{ color: pctColor(c[3]) }}>{c[3].toFixed(2)}%</span>, c[4] ?? "—", c[5] ?? "—", pc ? "$" + Math.round(pc).toLocaleString("es-CL") : "—"];
               })} />
           </div>
@@ -1049,8 +1086,12 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
                   </div>
                   <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
                     <div style={{ fontSize: 11, color: "#666" }}>Ejecutado a la fecha</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoTotal / 1000)}M</div>
-                    <div style={{ fontSize: 11, color: "#666" }}>{data.s6.nViaticos} viáticos</div>
+                    {data.s6.montoTotal === null || data.s6.montoTotal === undefined ? (
+                      <div style={{ fontSize: 13, fontWeight: 700, color: AMBER_TXT }}>Dato pendiente</div>
+                    ) : (
+                      <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{fmtM(data.s6.montoTotal / 1000)}M</div>
+                    )}
+                    <div style={{ fontSize: 11, color: "#666" }}>{data.s6.nViaticos === null || data.s6.nViaticos === undefined ? "N° de viáticos: dato pendiente" : `${data.s6.nViaticos} viáticos`}</div>
                   </div>
                   <div style={{ flex: 1, minWidth: 160, border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 14 }}>
                     <div style={{ fontSize: 11, color: "#666" }}>% ejecución regional</div>

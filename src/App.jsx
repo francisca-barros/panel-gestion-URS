@@ -542,26 +542,33 @@ function RadarProyectos({ rows }) {
   );
 }
 
-function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) {
-  const [form, setForm] = useState({ programa: "PMU", meta_tecnica: "", real_tecnica: "", meta_financiera: "", real_financiera: "", corte_fecha: "" });
+function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista, metas = [] }) {
+  const [form, setForm] = useState({ programa: "PMU", real_tecnica: "", real_financiera: "", corte_fecha: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
   const filas = rows.filter(r => r.tipo === tipo && (r.vista || "mensual") === vista).sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
 
+  // Meta vigente (cargada una sola vez en "Metas de la región") para el programa elegido
+  const metaVig = metas.find(m => m.programa === form.programa && m.tipo === tipo);
+  const metaT = metaVig?.meta_tecnica ?? null;
+  const metaF = tipo === "rendicion" ? (metaVig?.meta_financiera ?? null) : null;
+  const faltaMeta = metaT == null || (tipo === "rendicion" && metaF == null);
+
   async function addRow() {
     if (!form.corte_fecha) return;
     setBusy(true); setErr(null);
     try {
+      // La meta ya no se guarda en el registro: el panel la toma siempre de "Metas de la región"
       await fetcher.insertRow("indicadores_revision", {
         region_id: regionId, programa: form.programa, tipo, vista,
-        meta_tecnica: form.meta_tecnica === "" ? null : Number(form.meta_tecnica),
+        meta_tecnica: null,
         real_tecnica: form.real_tecnica === "" ? null : Number(form.real_tecnica),
-        meta_financiera: form.meta_financiera === "" ? null : Number(form.meta_financiera),
+        meta_financiera: null,
         real_financiera: form.real_financiera === "" ? null : Number(form.real_financiera),
         corte_fecha: form.corte_fecha,
       });
-      setForm({ ...form, meta_tecnica: "", real_tecnica: "", meta_financiera: "", real_financiera: "", corte_fecha: "" });
+      setForm({ ...form, real_tecnica: "", real_financiera: "", corte_fecha: "" });
       onChanged();
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   }
@@ -592,16 +599,85 @@ function IndicadoresEditor({ regionId, rows, fetcher, onChanged, tipo, vista }) 
           <option value="PMU">PMU</option><option value="PMB">PMB</option>
         </select>
         <input type="date" value={form.corte_fecha} onChange={e => setForm({ ...form, corte_fecha: e.target.value })} style={{ padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
-        <input placeholder="Meta téc." type="number" step="0.1" value={form.meta_tecnica} onChange={e => setForm({ ...form, meta_tecnica: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
         <input placeholder="Real téc." type="number" step="0.1" value={form.real_tecnica} onChange={e => setForm({ ...form, real_tecnica: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
         {tipo === "rendicion" && <>
-          <input placeholder="Meta fin." type="number" step="0.1" value={form.meta_financiera} onChange={e => setForm({ ...form, meta_financiera: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
           <input placeholder="Real fin." type="number" step="0.1" value={form.real_financiera} onChange={e => setForm({ ...form, real_financiera: e.target.value })} style={{ width: 75, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` }} />
         </>}
         <button onClick={addRow} disabled={busy || !form.corte_fecha} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: busy ? "white" : NAVY, color: busy ? "#999" : "white", fontWeight: 700, fontSize: 12, cursor: busy ? "default" : "pointer" }}>
           {busy ? "..." : "+ Agregar"}
         </button>
+        <span style={{ fontSize: 11.5, color: faltaMeta ? RED : "#666", flexBasis: "100%" }}>
+          {faltaMeta
+            ? `Falta la meta de ${form.programa} (${tipo === "rendicion" ? "técnica y financiera" : "técnica"}): defínela arriba en "Metas de la región". Se guardará sin meta.`
+            : `Meta aplicada automáticamente: téc. ${metaT}d${tipo === "rendicion" ? ` · fin. ${metaF}d` : ""}`}
+        </span>
       </div>
+    </div>
+  );
+}
+
+// Metas fijas por región (se ingresan una sola vez): 2 de evaluación (PMU, PMB) + 4 de rendición (téc/fin × PMU/PMB)
+const METAS_CAMPOS = [
+  { key: "evaluacion|PMU|meta_tecnica", label: "Evaluación PMU" },
+  { key: "evaluacion|PMB|meta_tecnica", label: "Evaluación PMB" },
+  { key: "rendicion|PMU|meta_tecnica", label: "Rendición técnica PMU" },
+  { key: "rendicion|PMB|meta_tecnica", label: "Rendición técnica PMB" },
+  { key: "rendicion|PMU|meta_financiera", label: "Rendición financiera PMU" },
+  { key: "rendicion|PMB|meta_financiera", label: "Rendición financiera PMB" },
+];
+function MetasEditor({ regionId, metas, fetcher, onChanged }) {
+  const inicial = () => {
+    const o = {};
+    for (const c of METAS_CAMPOS) {
+      const [tipo, programa, campo] = c.key.split("|");
+      const m = metas.find(x => x.tipo === tipo && x.programa === programa);
+      o[c.key] = m?.[campo] != null ? String(m[campo]) : "";
+    }
+    return o;
+  };
+  const [vals, setVals] = useState(inicial);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { setVals(inicial()); /* eslint-disable-next-line */ }, [regionId, metas]);
+  const faltan = METAS_CAMPOS.filter(c => vals[c.key] === "").length;
+
+  async function guardar() {
+    setBusy(true); setMsg(null);
+    try {
+      // Una fila por (tipo, programa) con meta_tecnica y meta_financiera
+      for (const tipo of ["evaluacion", "rendicion"]) for (const programa of ["PMU", "PMB"]) {
+        const t = vals[`${tipo}|${programa}|meta_tecnica`];
+        const f = tipo === "rendicion" ? vals[`${tipo}|${programa}|meta_financiera`] : "";
+        const patch = { meta_tecnica: t === "" ? null : Number(t), meta_financiera: f === "" ? null : Number(f) };
+        const filtro = `region_id=eq.${encodeURIComponent(regionId)}&programa=eq.${programa}&tipo=eq.${tipo}`;
+        const upd = await fetcher.updateWhere("metas_revision", filtro, patch);
+        if (!upd.length) await fetcher.insertRow("metas_revision", { region_id: regionId, programa, tipo, ...patch });
+      }
+      setMsg("Metas guardadas."); onChanged();
+    } catch (e) { setMsg("Error: " + e.message); } finally { setBusy(false); }
+  }
+  const inp = { width: 70, padding: 5, borderRadius: 4, fontSize: 12, border: `1px solid ${GRAYBLUE}` };
+  return (
+    <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, marginBottom: 14, overflow: "hidden" }}>
+      <button onClick={() => setOpen(o => !o)} style={{ width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "#EAF1F6", cursor: "pointer", fontSize: 12.5, fontWeight: 700, color: NAVY }}>
+        {open ? "▼" : "▶"} Metas de la región (se definen una sola vez){faltan > 0 && <span style={{ color: RED, fontWeight: 600 }}> · faltan {faltan} de 6</span>}
+      </button>
+      {open && (
+        <div style={{ padding: 12 }}>
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>Días. Al agregar un indicador nuevo se usa esta meta automáticamente. Cambiar una meta aquí actualiza todos los meses de esta región, nuevos y antiguos.</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+            {METAS_CAMPOS.map(c => (
+              <label key={c.key} style={{ fontSize: 11.5, color: "#444", display: "flex", flexDirection: "column", gap: 3 }}>
+                {c.label}
+                <input type="number" step="0.1" value={vals[c.key]} onChange={e => setVals({ ...vals, [c.key]: e.target.value })} style={inp} />
+              </label>
+            ))}
+            <button onClick={guardar} disabled={busy} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: busy ? "#ccc" : NAVY, color: "white", fontWeight: 700, fontSize: 12, cursor: busy ? "default" : "pointer" }}>{busy ? "..." : "Guardar metas"}</button>
+          </div>
+          {msg && <div style={{ fontSize: 12, marginTop: 8, color: msg.startsWith("Error") ? RED : "#2E7D32" }}>{msg}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -1136,6 +1212,8 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
               <button onClick={() => setCompararMeses(false)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: !compararMeses ? NAVY : "white", color: !compararMeses ? "white" : NAVY }}>Desactivado (solo mes actual)</button>
             </div>
 
+            <MetasEditor regionId={regionId} metas={data.s7metas || []} fetcher={fetcher} onChanged={onDataChanged} />
+
             <SectionTitle n="7A" title="Tiempo de evaluación de proyectos (pre-aprobación)" />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_SOFT }}>Vista:</span>
@@ -1145,7 +1223,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
             <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
             <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación — vista {vista7a} (PMU y PMB):</div>
-            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} />
+            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} metas={data.s7metas || []} />
 
             <SectionTitle n="7B" title="Tiempo de revisión de rendición (post-transferencia)" />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
@@ -1156,7 +1234,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
             <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
             <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de rendición — vista {vista7b} (PMU y PMB):</div>
-            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} />
+            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} metas={data.s7metas || []} />
           </div>
         )}
 
@@ -1346,6 +1424,7 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
           safeFetch("aporte_percapita"),
           safeFetch("deuda_flotante_detalle"),
           safeFetch("proyectos_priorizados"),
+          safeFetch("metas_revision"),
         ]);
         const warns = [];
         const clean = results.map((r) => {
@@ -1354,7 +1433,13 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
         });
         if (warns.length) setWarnings(warns);
 
-        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData, carteraCriticaData, percapitaData, deudaDetalleData, priorizadosData] = clean;
+        const [regData, comData, indData, deudaData, cartData, viatData, viatMensualData, viatFuncData, acuerdosData, coberturaData, radarData, iralResumenData, iralNuevosData, carteraCriticaData, percapitaData, deudaDetalleData, priorizadosData, metasData] = clean;
+        // Metas fijas por región: la meta de la tabla metas_revision manda sobre todos los registros; si no hay, usa la guardada en el registro
+        const metaDe = (rid, prog, tipo) => (metasData || []).find(m => m.region_id === rid && m.programa === prog && m.tipo === tipo);
+        const indConMeta = indData.map(i => {
+          const m = metaDe(i.region_id, i.programa, i.tipo);
+          return { ...i, meta_tecnica: m?.meta_tecnica ?? i.meta_tecnica ?? null, meta_financiera: m?.meta_financiera ?? i.meta_financiera ?? null };
+        });
         const regRaw = results[0];
         if (regRaw && regRaw.__error) throw new Error(`No se pudo leer 'regiones': ${regRaw.__error}`);
         if (!regData.length) throw new Error("La tabla 'regiones' respondió correctamente pero devolvió 0 filas. Revisa que las filas existan en el schema 'public' y que la policy de lectura esté activa para el rol 'anon'.");
@@ -1372,15 +1457,16 @@ function useRegionsFromSupabase(fetcher, enabled, refreshKey) {
             })(),
             s2regional: null,
             s3: null,
-            s7raw: indData.filter(i => i.region_id === r.id),
+            s7raw: indConMeta.filter(i => i.region_id === r.id),
+            s7metas: (metasData || []).filter(m => m.region_id === r.id),
             s7a: (() => {
-              const pmu = indData.find(i => i.region_id === r.id && i.programa === "PMU" && i.tipo === "evaluacion");
-              const pmb = indData.find(i => i.region_id === r.id && i.programa === "PMB" && i.tipo === "evaluacion");
+              const pmu = indConMeta.find(i => i.region_id === r.id && i.programa === "PMU" && i.tipo === "evaluacion");
+              const pmb = indConMeta.find(i => i.region_id === r.id && i.programa === "PMB" && i.tipo === "evaluacion");
               return pmu || pmb ? { pmu: { meta: pmu?.meta_tecnica, real: pmu?.real_tecnica }, pmb: { meta: pmb?.meta_tecnica, real: pmb?.real_tecnica } } : null;
             })(),
             s7b: (() => {
               function latestAndPrev(programa) {
-                const rows = indData.filter(i => i.region_id === r.id && i.programa === programa && i.tipo === "rendicion")
+                const rows = indConMeta.filter(i => i.region_id === r.id && i.programa === programa && i.tipo === "rendicion")
                   .sort((a, b) => new Date(b.corte_fecha) - new Date(a.corte_fecha));
                 return { latest: rows[0], prev: rows[1] };
               }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
 
 // ---------- Paleta institucional (misma de las fichas .docx) ----------
 const NAVY = "#0F2942";
@@ -682,6 +682,66 @@ function MetasEditor({ regionId, metas, fetcher, onChanged }) {
   );
 }
 
+// Gráficos meta vs real: un cuadro por programa y tipo de plazo (técnico / financiero)
+function GraficoMetas({ rows, tipo, vista, showFinanciera = false }) {
+  const base = rows.filter(r => r.tipo === tipo && (r.vista || "mensual") === vista);
+  const medidas = [["tecnica", "Técnica"], ...(showFinanciera ? [["financiera", "Financiera"]] : [])];
+  const cuadros = [];
+  for (const prog of ["PMU", "PMB"]) for (const [m, nombre] of medidas) {
+    const serie = base.filter(r => r.programa === prog && r[`real_${m}`] != null)
+      .sort((a, b) => new Date(a.corte_fecha) - new Date(b.corte_fecha))
+      .map(r => ({ fecha: fmtFecha(r.corte_fecha), real: Number(r[`real_${m}`]), meta: r[`meta_${m}`] != null ? Number(r[`meta_${m}`]) : null }));
+    cuadros.push({ prog, nombre, serie });
+  }
+  if (cuadros.every(c => c.serie.length === 0)) return null;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: "#666", margin: "4px 0 8px" }}>Real vs meta, en días (línea punteada = meta; punto rojo = sobre la meta):</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 }}>
+        {cuadros.map(c => {
+          const ult = c.serie[c.serie.length - 1];
+          const meta = ult?.meta;
+          const brecha = ult && meta != null ? ult.real - meta : null;
+          const sobre = brecha != null && brecha > 0;
+          const meses = c.serie.filter(x => x.meta != null);
+          const nSobre = meses.filter(x => x.real > x.meta).length;
+          return (
+            <div key={c.prog + c.nombre} style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, padding: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: NAVY }}>{c.prog} · {c.nombre}</span>
+                {ult && (brecha == null
+                  ? <span style={{ fontSize: 11, color: "#888" }}>sin meta definida</span>
+                  : <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 4, padding: "2px 8px", background: sobre ? "#FDE2E2" : GREEN_BG, color: sobre ? RED : GREEN_TXT }}>
+                      {sobre ? `+${brecha.toFixed(1)}d sobre la meta` : brecha === 0 ? "en la meta" : `${Math.abs(brecha).toFixed(1)}d bajo la meta`}
+                    </span>)}
+              </div>
+              {c.serie.length === 0 ? <div style={{ fontSize: 12, color: "#888", padding: "20px 0" }}>Sin registros.</div> : <>
+                <div style={{ fontSize: 11, color: "#666", marginBottom: 2 }}>
+                  {meses.length > 0 && `${nSobre} de ${meses.length} cortes sobre la meta · `}último: {ult.fecha}
+                </div>
+                <div style={{ width: "100%", height: 150 }}>
+                  <ResponsiveContainer>
+                    <LineChart data={c.serie} margin={{ top: 6, right: 12, left: -18, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                      <XAxis dataKey="fecha" tick={{ fontSize: 9 }} interval="preserveStartEnd" minTickGap={24} />
+                      <YAxis tick={{ fontSize: 10 }} />
+                      <Tooltip formatter={(v, n) => [`${v}d`, n === "real" ? "Real" : "Meta"]} labelStyle={{ fontSize: 11 }} contentStyle={{ fontSize: 11 }} />
+                      {meta != null && <ReferenceLine y={meta} stroke={TEAL} strokeDasharray="5 4" />}
+                      <Line type="stepAfter" dataKey="meta" stroke={TEAL} strokeDasharray="5 4" dot={false} strokeWidth={1.5} isAnimationActive={false} connectNulls />
+                      <Line type="monotone" dataKey="real" stroke={NAVY} strokeWidth={2} isAnimationActive={false}
+                        dot={({ cx, cy, payload, index }) => <circle key={index} cx={cx} cy={cy} r={4} fill={payload.meta != null && payload.real > payload.meta ? RED : NAVY} stroke="white" strokeWidth={1} />} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function IralResumenEditor({ regionId, rows, fetcher, onChanged }) {
   const [form, setForm] = useState({ programa: "PMU", n_proyectos: "", monto: "", n_revision_urs: "", corte_fecha: "" });
   const [busy, setBusy] = useState(false);
@@ -1222,6 +1282,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             </div>
             <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
             <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
+            <GraficoMetas rows={data.s7raw || []} tipo="evaluacion" vista={vista7a} showFinanciera={false} />
             <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación — vista {vista7a} (PMU y PMB):</div>
             <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} metas={data.s7metas || []} />
 
@@ -1233,6 +1294,7 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             </div>
             <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
             <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
+            <GraficoMetas rows={data.s7raw || []} tipo="rendicion" vista={vista7b} showFinanciera={true} />
             <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de rendición — vista {vista7b} (PMU y PMB):</div>
             <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} metas={data.s7metas || []} />
           </div>
@@ -1621,16 +1683,16 @@ function PanelURSInner() {
   return (
     <div style={{ fontFamily: "Arial, Helvetica, sans-serif", background: "#F7F9FB", minHeight: "100vh", padding: "20px" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
           <div>
             <div style={{ fontSize: 11, color: TEAL, fontWeight: 700, letterSpacing: 1.5 }}>SUBDERE — DIVISIÓN DE MUNICIPALIDADES</div>
             <h1 style={{ fontSize: 24, fontWeight: 800, color: NAVY, margin: "2px 0 0" }}>Panel de Gestión URS</h1>
             <div style={{ fontSize: 12, color: "#666" }}>Prototipo — cobertura: 3 de 16 regiones (datos verificados a ago-2026)</div>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {Object.entries(regions).map(([key, r]) => (
               <button key={key} onClick={() => setRegion(key)} style={{
-                border: "none", cursor: "pointer", padding: "10px 18px", borderRadius: 8, fontWeight: 700, fontSize: 13,
+                border: "none", cursor: "pointer", padding: "8px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, whiteSpace: "nowrap",
                 background: activeRegion === key ? NAVY : "white", color: activeRegion === key ? "white" : NAVY,
                 boxShadow: activeRegion === key ? "none" : "0 0 0 1px " + LIGHTGRAY,
               }}>{r.label}</button>

@@ -742,6 +742,19 @@ function GraficoMetas({ rows, tipo, vista, showFinanciera = false }) {
   );
 }
 
+// Bloque plegable (cerrado por defecto) para el detalle/tabla de indicadores
+function Plegable({ titulo, children, abiertoInicial = false }) {
+  const [abierto, setAbierto] = useState(abiertoInicial);
+  return (
+    <div style={{ border: `1px solid ${LIGHTGRAY}`, borderRadius: 8, marginBottom: 14, overflow: "hidden" }}>
+      <button onClick={() => setAbierto(a => !a)} style={{ width: "100%", textAlign: "left", padding: "8px 12px", border: "none", background: "#EAF1F6", cursor: "pointer", fontSize: 12.5, fontWeight: 700, color: NAVY }}>
+        {abierto ? "▼" : "▶"} {titulo}
+      </button>
+      {abierto && <div style={{ padding: 12 }}>{children}</div>}
+    </div>
+  );
+}
+
 function IralResumenEditor({ regionId, rows, fetcher, onChanged }) {
   const [form, setForm] = useState({ programa: "PMU", n_proyectos: "", monto: "", n_revision_urs: "", corte_fecha: "" });
   const [busy, setBusy] = useState(false);
@@ -1283,8 +1296,9 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
             <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="evaluacion" vista={vista7a} showFinanciera={false} compararActivo={compararMeses} />
             <GraficoMetas rows={data.s7raw || []} tipo="evaluacion" vista={vista7a} showFinanciera={false} />
-            <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de evaluación — vista {vista7a} (PMU y PMB):</div>
-            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} metas={data.s7metas || []} />
+            <Plegable titulo={`Detalle de indicadores de evaluación — vista ${vista7a} (ver / agregar / borrar registros)`}>
+              <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="evaluacion" vista={vista7a} metas={data.s7metas || []} />
+            </Plegable>
 
             <SectionTitle n="7B" title="Tiempo de revisión de rendición (post-transferencia)" />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, background: LIGHTGRAY, padding: "8px 12px", borderRadius: 8 }}>
@@ -1295,8 +1309,9 @@ function RegionPanel({ data, fetcher, regionId, onDataChanged }) {
             <ComparadorMeses rows={data.s7raw || []} programa="PMU" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
             <ComparadorMeses rows={data.s7raw || []} programa="PMB" tipo="rendicion" vista={vista7b} showFinanciera={true} compararActivo={compararMeses} />
             <GraficoMetas rows={data.s7raw || []} tipo="rendicion" vista={vista7b} showFinanciera={true} />
-            <div style={{ fontSize: 12, color: "#666", margin: "10px 0 6px" }}>Editar / agregar registros de rendición — vista {vista7b} (PMU y PMB):</div>
-            <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} metas={data.s7metas || []} />
+            <Plegable titulo={`Detalle de indicadores de rendición — vista ${vista7b} (ver / agregar / borrar registros)`}>
+              <IndicadoresEditor regionId={regionId} rows={data.s7raw || []} fetcher={fetcher} onChanged={onDataChanged} tipo="rendicion" vista={vista7b} metas={data.s7metas || []} />
+            </Plegable>
           </div>
         )}
 

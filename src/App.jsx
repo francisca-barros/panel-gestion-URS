@@ -1418,13 +1418,27 @@ function makeSupabaseFetcher(url, key) {
   const base = url.trim().replace(/\/+$/, "").replace(/\/rest\/v1$/i, "");
   const headers = { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
 
-  async function fetchTable(table) {
-    const res = await fetch(`${base}/rest/v1/${table}?select=*`, { headers });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`${table}: HTTP ${res.status} ${text.slice(0, 200)}`);
+  // Lee la tabla completa por tramos de 1.000 filas (Supabase corta cada respuesta en 1.000)
+  async function fetchTable(table, order) {
+    const PAGE = 1000;
+    let todo = [];
+    for (let off = 0; off < 500000; off += PAGE) {
+      const res = await fetch(`${base}/rest/v1/${table}?select=*${order ? `&order=${order}` : ""}&limit=${PAGE}&offset=${off}`, { headers });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`${table}: HTTP ${res.status} ${text.slice(0, 200)}`);
+      }
+      const parte = await res.json();
+      todo = todo.concat(parte);
+      if (parte.length < PAGE) break;
     }
-    return res.json();
+    return todo;
+  }
+  async function insertMany(table, rows) {
+    const res = await fetch(`${base}/rest/v1/${table}`, {
+      method: "POST", headers: { ...headers, Prefer: "return=minimal" }, body: JSON.stringify(rows),
+    });
+    if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
 
   async function insertRow(table, row) {
@@ -1456,7 +1470,7 @@ function makeSupabaseFetcher(url, key) {
     if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
 
-  return { fetchTable, insertRow, updateRow, updateWhere, deleteRow };
+  return { fetchTable, insertRow, insertMany, updateRow, updateWhere, deleteRow };
 }
 
 // ---------- Carga de datos desde Supabase (reemplaza el REGIONS hardcodeado) ----------
@@ -1674,6 +1688,712 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// =====================================================================
+// SEGUIMIENTO DE PROYECTOS (vista aparte: dirección  …/#seguimiento)
+// =====================================================================
+const SEG_REG = { 1: "Tarapacá", 2: "Antofagasta", 3: "Atacama", 4: "Coquimbo", 5: "Valparaíso", 6: "O'Higgins", 7: "Maule", 8: "Biobío", 9: "La Araucanía", 10: "Los Lagos", 11: "Aysén", 12: "Magallanes", 13: "Metropolitana", 14: "Los Ríos", 15: "Arica y Parinacota", 16: "Ñuble" };
+const SEG_REG_ID = { 1: "tarapaca", 2: "antofagasta", 3: "atacama", 4: "coquimbo", 5: "valparaiso", 6: "ohiggins", 7: "maule", 8: "biobio", 9: "araucania", 10: "los-lagos", 11: "aysen", 12: "magallanes", 13: "metropolitana", 14: "los-rios", 15: "arica-y-parinacota", 16: "nuble" };
+const SEG_ORDEN = [15, 1, 2, 3, 4, 5, 13, 6, 7, 16, 8, 9, 14, 10, 11, 12].map(c => SEG_REG_ID[c]);
+const SEG_LABEL_FALLBACK = Object.fromEntries(Object.keys(SEG_REG).map(c => [SEG_REG_ID[c], SEG_REG[c]]));
+const SEG_ETAPAS = [
+  { id: "licitacion", n: "En licitación", s: "Incluye administración directa decretada. El detalle de la licitación (publicación, ofertas, evaluación) está por confirmar: usa la nota." },
+  { id: "adjudicado", n: "Adjudicado", s: "Adjudicación aprobada por decreto" },
+  { id: "contratado", n: "Contratado", s: "Garantías pedidas y contrato firmado" },
+  { id: "obras", n: "En obras", s: "Contrato registrado en SUBDERE en línea (obra en EJECUCIÓN)" },
+  { id: "cierre", n: "En cierre", s: "Cierre solicitado o en trámite (guías C·1 y C·2)" },
+];
+const SEG_ETAPA_IDX = Object.fromEntries(SEG_ETAPAS.map((e, i) => [e.id, i]));
+const SEG_LINEA = { "Tradicional": "PMU IRAL", "PMB Tradicional": "PMB IRAL", "Fondo Recuperación de Ciudades": "FRC" };
+const SEG_ESTADOS_ALCANCE = ["aprobado", "con anticipo solicitado", "con giro por anticipo", "en ejecucion", "en proceso de cierre"];
+const SEG_DIAS_DESACTUALIZADO = 30; // plazo definido por Fran (02-11-2026)
+const SEG_ESTADO_LABEL = { sin: "Sin actualizar", vie: "Desactualizado", ok: "Al día" };
+
+const segHoy = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const segDias = (iso) => Math.max(0, Math.round((new Date(segHoy()) - new Date(iso)) / 864e5));
+const segClp = (n) => (n ? "$" + Number(n).toLocaleString("es-CL") : "Monto: sin dato");
+const segNorm = (s) => String(s == null ? "" : s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ").trim();
+// "ALTO DEL CARMEN" / "Alto Del Carmen" -> "Alto del Carmen"
+const segTitulo = (s) => String(s == null ? "" : s).trim().toLowerCase().split(/\s+/).map((w, i) => {
+  if (i > 0 && ["de", "del", "la", "las", "los", "y", "el"].includes(w)) return w;
+  return w.replace(/(^|['\-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+}).join(" ");
+const segMsgError = (e) => {
+  const t = String((e && e.message) || e);
+  if (/23505|duplicate key/i.test(t)) return "Ese código ya existe en otro proyecto.";
+  if (/42501|row-level security/i.test(t)) return "Falta el permiso en la base de datos (ejecutar seguimiento_esquema.sql).";
+  return t;
+};
+
+// ---------- Lectura de archivos (.xls de SUBDERE en línea = HTML, .xlsx, .csv) ----------
+function segDecodificar(bytes) {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch (e) { return new TextDecoder("windows-1252").decode(bytes); }
+}
+async function segLeerMatriz(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const cabecera = new TextDecoder("latin1").decode(bytes.slice(0, 3000)).toLowerCase();
+  const nombre = (file.name || "").toLowerCase();
+  if (/<html|<table|<!doctype html/.test(cabecera)) {
+    // El "Excel" de SUBDERE en línea es en realidad una página HTML con tablas
+    const doc = new DOMParser().parseFromString(segDecodificar(bytes), "text/html");
+    const tablas = [...doc.querySelectorAll("table")].filter(t => !t.querySelector("table"));
+    if (!tablas.length) throw new Error("No encontré ninguna tabla en el archivo.");
+    const mejor = tablas.reduce((a, b) => (b.rows.length > a.rows.length ? b : a));
+    return [...mejor.rows].map(r => [...r.cells].map(c => c.textContent.replace(/ /g, " ").trim()));
+  }
+  const XLSX = await import("xlsx");
+  let wb;
+  if (nombre.endsWith(".csv") || nombre.endsWith(".txt")) wb = XLSX.read(segDecodificar(bytes).replace(/^﻿/, ""), { type: "string" });
+  else wb = XLSX.read(bytes, { type: "array" });
+  let mejor = null, n = -1;
+  for (const nm of wb.SheetNames) {
+    const m = XLSX.utils.sheet_to_json(wb.Sheets[nm], { header: 1, defval: "", raw: false });
+    if (m.length > n) { n = m.length; mejor = m; }
+  }
+  return mejor || [];
+}
+
+const SEG_ALIAS = {
+  codigo: ["id. proyecto", "id proyecto", "codigo proyecto", "codigo", "id"],
+  region: ["region cod", "region"],
+  comuna: ["comuna"],
+  programa: ["programa"],
+  nombre: ["nombre proyecto", "nombre"],
+  monto: ["aporte subdere ($)", "aporte subdere", "monto subdere", "monto"],
+  estado: ["estado", "estado subdere"],
+  anio: ["ano creacion", "anio creacion"],
+};
+function segRegionId(v) {
+  const s = segNorm(v);
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return SEG_REG_ID[+s] || null;
+  for (const c of Object.keys(SEG_REG)) if (segNorm(SEG_REG[c]) === s) return SEG_REG_ID[c];
+  for (const c of Object.keys(SEG_REG)) if (s.includes(segNorm(SEG_REG[c]))) return SEG_REG_ID[c];
+  return null;
+}
+// Analiza la matriz leída. regionPermitida: id de región (jefe URS) o null (gabinete: todas)
+function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor }) {
+  let hi = -1, col = {};
+  for (let i = 0; i < Math.min(matriz.length, 40) && hi < 0; i++) {
+    const celdas = matriz[i].map(segNorm);
+    const c = {};
+    for (const campo of Object.keys(SEG_ALIAS)) {
+      for (const al of SEG_ALIAS[campo]) { const k = celdas.indexOf(al); if (k >= 0) { c[campo] = k; break; } }
+    }
+    if (c.comuna != null && c.nombre != null && c.programa != null && c.region != null) { hi = i; col = c; }
+  }
+  if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
+  const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, sinEstado: col.estado == null };
+  const recs = [], rechazos = [], vistos = new Set();
+  for (let i = hi + 1; i < matriz.length; i++) {
+    const r = matriz[i];
+    if (!r || r.every(x => String(x == null ? "" : x).trim() === "")) continue;
+    st.leidas++;
+    const fila = i + 1, codigo = get("codigo", r), nombre = get("nombre", r);
+    if (col.estado != null && !SEG_ESTADOS_ALCANCE.includes(segNorm(get("estado", r)))) { st.fueraAlcance++; continue; }
+    const rid = segRegionId(get("region", r));
+    const rech = (motivo) => rechazos.push({ fila, codigo, nombre, motivo });
+    if (!rid) { rech("región no reconocida"); continue; }
+    if (regionPermitida && rid !== regionPermitida) { st.otraRegion++; continue; }
+    if (!codigo) { rech("sin código (agrégalo a mano para evitar duplicados)"); continue; }
+    if (codigosExistentes.has(codigo)) { st.yaExistian++; continue; }
+    if (vistos.has(codigo)) { rech("código repetido dentro del archivo"); continue; }
+    const comuna = segTitulo(get("comuna", r)), programa = get("programa", r);
+    if (!comuna || !nombre || !programa) { rech("faltan datos (comuna, programa o nombre)"); continue; }
+    vistos.add(codigo);
+    const monto = parseInt(get("monto", r).replace(/[^\d]/g, ""), 10);
+    const anio = parseInt(get("anio", r), 10);
+    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, origen: "excel", creado_por: autor });
+  }
+  return { stats: st, recs, rechazos };
+}
+
+const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #000000; --muted: #4B5163; --line: #C8CFDD;
+  --primary: #25306B; --onprimary: #FFFFFF; --secondary: #006BB9; --alert: #FF1D3D; --onalert: #FFFFFF; --accent: #FFDC00; --onaccent: #000000;
+  --ok: #1B6B3A; --okbg: #E3F2E8;
+  --font: Verdana, Geneva, "DejaVu Sans", sans-serif;}
+@media (prefers-color-scheme: dark){.seg{--bg: #0D1124; --panel: #171D3A; --card: #1B2247; --ink: #EEF1F8; --muted: #A5AECB; --line: #2D3865;
+    --primary: #9DAAF2; --onprimary: #0D1124; --secondary: #4DA6EE; --alert: #FF5470; --onalert: #0D1124; --ok: #7BD39A; --okbg: #17321F; color-scheme: dark;}}
+.seg *{box-sizing: border-box;}
+.seg{background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 1.5; padding-block: 12px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));}
+.seg .wrap{max-width: 1100px; margin: 0 auto;}
+.seg button, .seg select, .seg input, .seg textarea{font-family: inherit; font-size: inherit; color: inherit;}
+.seg :focus-visible{outline: 3px solid var(--secondary); outline-offset: 2px;}
+.seg h1{font-size: 24px; line-height: 1.2; margin: 0; color: var(--primary); text-wrap: balance;}
+.seg h2{font-size: 19px; margin: 0 0 8px; color: var(--primary);}
+.seg .top{display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; margin-bottom: 8px;}
+.seg .proto{background: var(--accent); color: var(--onaccent); font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 4px;}
+.seg .note{background: var(--panel); border: 1px solid var(--line); padding: 10px 12px; margin: 0 0 14px; font-size: 14px;}
+.seg .note p{margin: 0 0 4px;}
+.seg .note p:last-child{margin: 0;}
+.seg .who{display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 16px;}
+.seg .who label{font-weight: 700;}
+.seg select, .seg input[type=text], .seg input[type=search], .seg input[type=date], .seg textarea{background: var(--bg); border: 2px solid var(--line); border-radius: 6px; padding: 10px 12px; min-height: 48px; max-width: 100%;}
+.seg textarea{width: 100%; min-height: 96px;}
+.seg .btn{border: 2px solid var(--primary); background: var(--bg); color: var(--primary); border-radius: 6px; padding: 10px 16px; min-height: 48px; cursor: pointer; font-weight: 700;}
+.seg .btn:hover{background: var(--panel);}
+.seg .btn.main{background: var(--primary); color: var(--onprimary);}
+.seg .btn.main:hover{filter: brightness(1.12);}
+.seg .btn.go{background: var(--ok); border-color: var(--ok); color: #FFFFFF;}
+.seg .btn.sm{min-height: 40px; padding: 6px 12px; font-size: 14px;}
+.seg .chips{display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px;}
+.seg .chip{border: 2px solid var(--line); background: var(--bg); border-radius: 22px; padding: 8px 14px; min-height: 44px; cursor: pointer;}
+.seg .chip[aria-pressed="true"]{background: var(--primary); border-color: var(--primary); color: var(--onprimary);}
+.seg .filters{display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;}
+.seg .filters > *{flex: 1 1 200px; min-width: 0;}
+.seg .kpis{display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 18px;}
+.seg .kpi{background: var(--panel); border: 1px solid var(--line); padding: 12px 14px;}
+.seg .kpi b{display: block; font-size: 30px; line-height: 1.1; color: var(--primary); font-variant-numeric: tabular-nums;}
+.seg .kpi span{font-size: 14px; color: var(--muted);}
+.seg .list{display: grid; gap: 12px;}
+.seg .card{background: var(--card); border: 2px solid var(--line); border-left: 8px solid var(--line); padding: 14px; display: grid; gap: 8px; min-width: 0;}
+.seg .card.sin{border-left-color: var(--accent);}
+.seg .card.vie{border-left-color: var(--alert);}
+.seg .card.ok{border-left-color: var(--ok);}
+.seg .card h3{margin: 0; font-size: 17px; line-height: 1.3; overflow-wrap: anywhere;}
+.seg .meta{font-size: 14px; color: var(--muted); overflow-wrap: anywhere;}
+.seg .row{display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;}
+.seg .pill{font-size: 14px; padding: 4px 10px; border-radius: 16px; border: 2px solid var(--line); background: var(--panel); font-weight: 700;}
+.seg .pill.sin{background: var(--accent); color: var(--onaccent); border-color: var(--accent);}
+.seg .pill.vie{background: var(--alert); color: var(--onalert); border-color: var(--alert);}
+.seg .pill.ok{background: var(--okbg); color: var(--ok); border-color: var(--ok);}
+.seg .tag{font-size: 12px; font-weight: 700; background: var(--secondary); color: #FFFFFF; padding: 2px 8px; border-radius: 4px;}
+.seg .actions{display: flex; flex-wrap: wrap; gap: 8px;}
+.seg .empty{padding: 24px; text-align: center; background: var(--panel); border: 1px dashed var(--line);}
+.seg .tw{overflow-x: auto; border: 1px solid var(--line);}
+.seg table{border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums;}
+.seg th, .seg td{padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap;}
+.seg th:first-child, .seg td:first-child{text-align: left; position: sticky; left: 0; background: var(--bg);}
+.seg th{background: var(--panel); font-size: 12px;}
+.seg tbody tr:hover td{background: var(--panel);}
+.seg td button{background: none; border: 0; color: var(--secondary); text-decoration: underline; cursor: pointer; padding: 6px 0; text-align: left; font-weight: 700;}
+.seg .bars{display: grid; gap: 8px; margin: 0 0 20px;}
+.seg .bar{display: grid; grid-template-columns: minmax(110px, 190px) 1fr 52px; gap: 8px; align-items: center; font-size: 14px;}
+.seg .bar{padding: 4px 8px; border: 2px solid transparent; border-radius: 6px; transition: background .12s, border-color .12s;}
+.seg .bar[data-drill]{cursor: pointer;}
+.seg .bar[data-drill]:hover, .seg .bar[data-drill]:focus-within{background: var(--panel); border-color: var(--secondary);}
+.seg .bar button{background: none; border: 0; text-align: left; padding: 4px 0; cursor: pointer; color: var(--ink);}
+.seg .bar button::after, .seg td button::after{content: " ›"; color: var(--secondary); font-weight: 700;}
+.seg .bar[data-drill]:hover button{font-weight: 700; color: var(--primary); text-decoration: underline;}
+.seg .bar[data-drill]:hover .fill{background: var(--secondary);}
+.seg tbody tr[data-drill]{cursor: pointer;}
+.seg tbody tr[data-drill]:hover td{background: var(--panel); box-shadow: inset 0 -2px 0 var(--secondary);}
+.seg tbody tr[data-drill]:hover td button{color: var(--primary);}
+.seg .track{background: var(--panel); height: 18px; border: 1px solid var(--line);}
+.seg .fill{background: var(--primary); height: 100%;}
+.seg .more{margin: 14px 0; text-align: center;}
+.seg .sheet{position: fixed; inset: 0; background: rgba(13,17,36,.62); z-index: 50; display: flex; align-items: flex-end; justify-content: center;}
+.seg .sheet[hidden]{display: none;}
+.seg .sbox{background: var(--bg); width: min(640px, 100%); max-height: 94%; overflow: auto; border-top: 6px solid var(--primary); padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));}
+@media (min-width: 700px){.seg .sheet{align-items: center;} .seg .sbox{border: 1px solid var(--line); border-top: 6px solid var(--primary);}}
+.seg .opt{display: flex; gap: 12px; align-items: flex-start; border: 2px solid var(--line); border-radius: 6px; padding: 12px; margin: 0 0 8px; cursor: pointer; min-height: 52px;}
+.seg .opt input{width: 24px; height: 24px; margin-top: 2px; flex: none;}
+.seg .opt.cur{border-color: var(--primary); background: var(--panel);}
+.seg .opt small{display: block; color: var(--muted); font-size: 12px;}
+.seg .opt .n{flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--primary); color: var(--onprimary); display: grid; place-items: center; font-size: 13px; font-weight: 700;}
+.seg .fld{margin: 12px 0;}
+.seg .fld > label{display: block; font-weight: 700; margin-bottom: 4px;}
+.seg .hist{font-size: 14px; color: var(--muted); padding-left: 18px;}
+.seg .toast{position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--primary); color: var(--onprimary); padding: 12px 18px; border-radius: 6px; z-index: 60; display: flex; gap: 14px; align-items: center; max-width: calc(100% - 32px);}
+.seg .toast[hidden]{display: none;}
+.seg .toast button{background: none; border: 0; color: var(--accent); text-decoration: underline; font-weight: 700; cursor: pointer; min-height: 40px;}
+.seg .foot{margin-top: 28px; color: var(--muted); font-size: 12px; max-width: 90ch;}
+@media (max-width: 600px){.seg h1{font-size: 21px;} .seg .bar{grid-template-columns: 1fr 52px;} .seg .bar .track{grid-column: 1 / -1; grid-row: 2;}}
+.seg .gate{display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin-top: 12px;}
+.seg .who[hidden], .seg .note[hidden]{display: none;}
+.seg .who-opt{text-align: left; font-size: 17px; min-height: 56px;}
+.seg .who{display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 16px;}`;
+
+function Hoja({ children, titulo, onClose }) {
+  return (
+    <div className="sheet" role="dialog" aria-modal="true" aria-label={titulo} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="sbox">{children}</div>
+    </div>
+  );
+}
+function textoHist(a) {
+  const quien2 = a.autor ? ` — ${a.autor}` : "";
+  if (a.tipo === "retiro") return `${fmtFecha(a.fecha)}: retirado del seguimiento${a.nota ? ` (${a.nota})` : ""}${quien2}`;
+  if (a.tipo === "reintegro") return `${fmtFecha(a.fecha)}: reintegrado al seguimiento${quien2}`;
+  const e = SEG_ETAPAS[SEG_ETAPA_IDX[a.etapa]];
+  return `${fmtFecha(a.fecha)}: ${e ? e.n : a.etapa}${a.nota ? ` (${a.nota})` : ""}${quien2}`;
+}
+
+function HojaActualizar({ ctx, it, foco }) {
+  const { fetcher, setHoja, mostrarToast, nuevaAnotacion, patchAn, patchPr } = ctx;
+    const [etapa, setEtapa] = useState(it.cur ? it.cur.etapa : "");
+    const [fecha, setFecha] = useState(segHoy());
+    const [nota, setNota] = useState("");
+    const [codigo, setCodigo] = useState(it.p.codigo || "");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    async function guardar() {
+      if (!etapa) { setErr("Elige en qué está el proyecto."); return; }
+      if (!fecha) { setErr("Indica la fecha."); return; }
+      if (fecha > segHoy()) { setErr("La fecha no puede ser futura."); return; }
+      setBusy(true); setErr("");
+      try {
+        const cod = codigo.trim();
+        if (!it.p.codigo && cod) { await fetcher.updateRow("seg_proyectos", it.p.id, { codigo: cod }); patchPr(it.p.id, { codigo: cod }); }
+        const fila = await nuevaAnotacion(it, { tipo: "avance", etapa, fecha, nota: nota.trim() || null });
+        setHoja(null);
+        mostrarToast("Listo, guardado.", async () => { try { await fetcher.updateRow("seg_anotaciones", fila.id, { anulada: true }); patchAn(fila.id, { anulada: true }); } catch (e) { mostrarToast("No se pudo deshacer: " + segMsgError(e)); } });
+      } catch (e) { setErr(segMsgError(e)); setBusy(false); }
+    }
+    const previas = it.hist.filter(a => !a.anulada).slice().reverse().slice(0, 5);
+    return (
+      <Hoja titulo="Actualizar proyecto" onClose={() => setHoja(null)}>
+        <h2>{it.p.nombre}</h2>
+        <p className="meta">{it.p.comuna} · {it.p.programa}</p>
+        <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+          <legend style={{ fontWeight: 700, marginBottom: 8 }}>¿En qué está hoy este proyecto?</legend>
+          {SEG_ETAPAS.map((s, i) => (
+            <label key={s.id} className={"opt" + (etapa === s.id ? " cur" : "")}>
+              <input type="radio" name="etapa" checked={etapa === s.id} onChange={() => setEtapa(s.id)} />
+              <span className="n">{i + 1}</span><span>{s.n}<small>{s.s}</small></span>
+            </label>
+          ))}
+        </fieldset>
+        {!it.p.codigo && (
+          <div className="fld"><label htmlFor="seg-cod">Código del proyecto</label>
+            <input type="text" id="seg-cod" autoFocus={!!foco} value={codigo} onChange={e => setCodigo(e.target.value)} placeholder="Ejemplo: 14102250601-C" autoComplete="off" />
+            <p className="meta">Este proyecto aún no tiene código. Anótalo aquí cuando lo tenga.</p></div>
+        )}
+        <div className="fld"><label htmlFor="seg-fecha">Fecha</label><input type="date" id="seg-fecha" value={fecha} max={segHoy()} onChange={e => setFecha(e.target.value)} /></div>
+        <div className="fld"><label htmlFor="seg-nota">Nota (opcional)</label>
+          <textarea id="seg-nota" value={nota} onChange={e => setNota(e.target.value)} placeholder="Por ejemplo: licitación publicada, se reciben ofertas hasta el 20 de noviembre." /></div>
+        {previas.length > 0 && <><p className="meta"><b>Anotaciones anteriores</b></p><ul className="hist">{previas.map(a => <li key={a.id}>{textoHist(a)}</li>)}</ul></>}
+        {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+        <div className="actions"><button type="button" className="btn main" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar"}</button><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>
+      </Hoja>
+    );
+}
+
+function HojaRetiro({ ctx, it }) {
+  const { fetcher, setHoja, mostrarToast, nuevaAnotacion, patchPr } = ctx;
+    const [motivo, setMotivo] = useState("");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    async function retirar() {
+      if (!motivo.trim()) { setErr("Escribe el motivo: queda en el historial."); return; }
+      setBusy(true); setErr("");
+      try {
+        await nuevaAnotacion(it, { tipo: "retiro", etapa: null, fecha: segHoy(), nota: motivo.trim() });
+        await fetcher.updateRow("seg_proyectos", it.p.id, { activo: false });
+        patchPr(it.p.id, { activo: false });
+        setHoja(null);
+        mostrarToast("Proyecto retirado. Queda en «Retirados» con su historial.");
+      } catch (e) { setErr(segMsgError(e)); setBusy(false); }
+    }
+    return (
+      <Hoja titulo="Retirar del seguimiento" onClose={() => setHoja(null)}>
+        <h2>Retirar del seguimiento</h2>
+        <p className="meta"><b>{it.p.nombre}</b><br />{it.p.comuna} · {it.p.programa}</p>
+        <p className="meta">El proyecto sale de las listas y de los conteos, pero no se borra: queda en «Retirados» con su historial y se puede reintegrar.</p>
+        <div className="fld"><label htmlFor="seg-mot">Motivo (obligatorio)</label>
+          <textarea id="seg-mot" value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Por ejemplo: proyecto cerrado en SUBDERE en línea." /></div>
+        {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+        <div className="actions"><button type="button" className="btn main" disabled={busy} onClick={retirar}>{busy ? "Guardando…" : "Retirar"}</button><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>
+      </Hoja>
+    );
+}
+
+function HojaHistorial({ ctx, it }) {
+  const { setHoja } = ctx;
+  return (
+    <Hoja titulo="Historial" onClose={() => setHoja(null)}>
+      <h2>{it.p.nombre}</h2>
+      <p className="meta">{it.p.comuna} · {it.p.programa}</p>
+      {it.hist.filter(a => !a.anulada).length === 0 ? <p className="meta">Sin anotaciones.</p> :
+        <ul className="hist">{it.hist.filter(a => !a.anulada).slice().reverse().map(a => <li key={a.id}>{textoHist(a)}</li>)}</ul>}
+      <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
+    </Hoja>
+  );
+}
+
+function HojaAgregar({ ctx, regionInicial }) {
+  const { datos, esGab, as, autor, fetcher, labelReg, recargar, setHoja, mostrarToast } = ctx;
+    const [rid, setRid] = useState(esGab ? (regionInicial && SEG_ORDEN.includes(regionInicial) ? regionInicial : "") : as);
+    const [comuna, setComuna] = useState("");
+    const [programa, setPrograma] = useState("");
+    const [nombre, setNombre] = useState("");
+    const [monto, setMonto] = useState("");
+    const [codigo, setCodigo] = useState("");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const programas = [...new Set(datos.pr.map(p => p.programa))].sort((a, b) => a.localeCompare(b, "es"));
+    const comunasReg = [...new Set(datos.pr.filter(p => p.region_id === rid).map(p => p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
+    async function guardar() {
+      if (!rid) { setErr("Elige la región."); return; }
+      if (!comuna.trim() || !programa || !nombre.trim()) { setErr("Faltan datos: comuna, programa y nombre son obligatorios."); return; }
+      const cod = codigo.trim();
+      if (cod && datos.pr.some(p => p.codigo === cod)) { setErr("Ese código ya existe en el panel."); return; }
+      const m = monto.trim() ? parseInt(monto.replace(/[^\d]/g, ""), 10) : null;
+      setBusy(true); setErr("");
+      try {
+        await fetcher.insertRow("seg_proyectos", { codigo: cod || null, region_id: rid, comuna: segTitulo(comuna), programa, nombre: nombre.trim(), monto_subdere: Number.isFinite(m) ? m : null, origen: "manual", creado_por: autor });
+        recargar(); setHoja(null); mostrarToast("Proyecto agregado.");
+      } catch (e) { setErr(segMsgError(e)); setBusy(false); }
+    }
+    return (
+      <Hoja titulo="Agregar proyecto" onClose={() => setHoja(null)}>
+        <h2>Agregar un proyecto</h2>
+        {esGab && <div className="fld"><label htmlFor="seg-a-reg">Región</label>
+          <select id="seg-a-reg" value={rid} onChange={e => setRid(e.target.value)}><option value="">Elige una región</option>{SEG_ORDEN.map(id => <option key={id} value={id}>{labelReg(id)}</option>)}</select></div>}
+        <div className="fld"><label htmlFor="seg-a-com">Comuna</label>
+          <input type="text" id="seg-a-com" list="seg-comunas" value={comuna} onChange={e => setComuna(e.target.value)} autoComplete="off" />
+          <datalist id="seg-comunas">{comunasReg.map(c => <option key={c} value={c} />)}</datalist></div>
+        <div className="fld"><label htmlFor="seg-a-prog">Programa</label>
+          <select id="seg-a-prog" value={programa} onChange={e => setPrograma(e.target.value)}><option value="">Elige un programa</option>{programas.map(p => <option key={p} value={p}>{p}{SEG_LINEA[p] ? ` (${SEG_LINEA[p]})` : ""}</option>)}</select></div>
+        <div className="fld"><label htmlFor="seg-a-nom">Nombre del proyecto</label><textarea id="seg-a-nom" value={nombre} onChange={e => setNombre(e.target.value)} /></div>
+        <div className="fld"><label htmlFor="seg-a-mon">Monto SUBDERE en pesos (opcional)</label><input type="text" inputMode="numeric" id="seg-a-mon" value={monto} onChange={e => setMonto(e.target.value)} /></div>
+        <div className="fld"><label htmlFor="seg-a-cod">Código del proyecto (opcional)</label><input type="text" id="seg-a-cod" value={codigo} onChange={e => setCodigo(e.target.value)} autoComplete="off" placeholder="Si aún no lo tiene, déjalo vacío" /></div>
+        {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+        <div className="actions"><button type="button" className="btn main" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar"}</button><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>
+      </Hoja>
+    );
+}
+
+function HojaCarga({ ctx }) {
+  const { datos, esGab, as, autor, fetcher, labelReg, recargar, setHoja } = ctx;
+    const [fase, setFase] = useState("elegir"); // elegir | leyendo | resumen | guardando | listo
+    const [res, setRes] = useState(null);
+    const [err, setErr] = useState("");
+    const [nGuardados, setNGuardados] = useState(0);
+    async function leer(file) {
+      if (!file) return;
+      setFase("leyendo"); setErr("");
+      try {
+        const matriz = await segLeerMatriz(file);
+        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), autor });
+        if (r.error) { setErr(r.error); setFase("elegir"); return; }
+        setRes(r); setFase("resumen");
+      } catch (e) { setErr("No pude leer el archivo: " + (e.message || e) + ". Guárdalo como .xlsx o .csv y vuelve a intentar."); setFase("elegir"); }
+    }
+    async function guardar() {
+      setFase("guardando"); setErr("");
+      try {
+        const LOTE = 300;
+        let n = 0;
+        for (let i = 0; i < res.recs.length; i += LOTE) {
+          await fetcher.insertMany("seg_proyectos", res.recs.slice(i, i + LOTE));
+          n += Math.min(LOTE, res.recs.length - i); setNGuardados(n);
+        }
+        recargar(); setFase("listo");
+      } catch (e) { setErr(`Se guardaron ${nGuardados} proyectos y luego falló: ${segMsgError(e)}. Vuelve a cargar el mismo archivo: los ya guardados se omiten.`); recargar(); setFase("resumen"); }
+    }
+    const st = res && res.stats;
+    return (
+      <Hoja titulo="Cargar proyectos desde Excel" onClose={() => setHoja(null)}>
+        <h2>Cargar proyectos desde Excel</h2>
+        {fase === "elegir" && <>
+          <p className="meta">Sirve el listado de SUBDERE en línea (.xls), un .xlsx o un .csv. {esGab ? "Se aceptan todas las regiones." : `Solo se aceptan proyectos de la región de ${labelReg(as)}.`} Solo entran proyectos desde Aprobado en adelante; los códigos que ya existen se omiten.</p>
+          <div className="fld"><label htmlFor="seg-file">Archivo</label><input type="file" id="seg-file" accept=".xls,.xlsx,.csv,.txt" onChange={e => leer(e.target.files[0])} /></div>
+        </>}
+        {fase === "leyendo" && <p>Leyendo el archivo… puede tardar unos segundos.</p>}
+        {(fase === "resumen" || fase === "guardando") && st && <>
+          <div className="kpis">
+            <div className="kpi"><b>{res.recs.length}</b><span>proyectos nuevos que entran</span></div>
+            <div className="kpi"><b>{st.yaExistian}</b><span>ya estaban en el panel (se omiten)</span></div>
+            <div className="kpi"><b>{res.rechazos.length}</b><span>rechazados</span></div>
+          </div>
+          <p className="meta">Filas leídas: {st.leidas}. Fuera de alcance (estado distinto de Aprobado, Con Anticipo Solicitado, Con Giro por Anticipo, En Ejecución o En Proceso de Cierre): {st.fueraAlcance}.{!esGab && ` De otra región (se ignoran): ${st.otraRegion}.`}{st.sinEstado && " ATENCIÓN: el archivo no trae columna «Estado», no se pudo filtrar por alcance."}</p>
+          {res.rechazos.length > 0 && <>
+            <p className="meta"><b>Rechazados</b> (no se guardan):</p>
+            <div className="tw"><table><thead><tr><th>Fila</th><th>Código</th><th>Motivo</th></tr></thead><tbody>
+              {res.rechazos.slice(0, 50).map((r, i) => <tr key={i}><td>{r.fila}</td><td style={{ textAlign: "left" }}>{r.codigo || "—"}</td><td style={{ textAlign: "left", whiteSpace: "normal" }}>{r.motivo}</td></tr>)}
+            </tbody></table></div>
+            {res.rechazos.length > 50 && <p className="meta">…y {res.rechazos.length - 50} más.</p>}
+          </>}
+          {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+          <div className="actions" style={{ marginTop: 12 }}>
+            {res.recs.length > 0 && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : `Guardar ${res.recs.length} proyectos`}</button>}
+            <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
+          </div>
+        </>}
+        {fase === "listo" && <>
+          <p><b>Listo: se guardaron {nGuardados} proyectos.</b></p>
+          <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
+        </>}
+        {err && fase === "elegir" && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+        {fase === "elegir" && <div className="actions"><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>}
+      </Hoja>
+    );
+}
+
+function SeguimientoInner() {
+  const envUrl = import.meta.env.VITE_SUPABASE_URL;
+  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const [creds, setCreds] = useState(envUrl && envKey ? { url: envUrl, key: envKey } : null);
+  const fetcher = useMemo(() => (creds ? makeSupabaseFetcher(creds.url, creds.key) : null), [creds]);
+  const [datos, setDatos] = useState(null);
+  const [error, setError] = useState(null);
+  const [tick, setTick] = useState(0);
+  const [as, setAs] = useState(() => { try { return localStorage.getItem("seg-as") || ""; } catch (e) { return ""; } });
+  const [drill, setDrill] = useState(null);
+  const [flt, setFlt] = useState("all");
+  const [q, setQ] = useState("");
+  const [com, setCom] = useState("");
+  const [lim, setLim] = useState(25);
+  const [hoja, setHoja] = useState(null);
+  const [toast, setToast] = useState(null); // { msg, undo }
+  const toastTimer = React.useRef(null);
+
+  useEffect(() => {
+    if (!fetcher) return;
+    let vivo = true;
+    (async () => {
+      try {
+        const [reg, pr, an] = await Promise.all([fetcher.fetchTable("regiones"), fetcher.fetchTable("seg_proyectos", "id"), fetcher.fetchTable("seg_anotaciones", "id")]);
+        if (vivo) { setDatos({ reg, pr, an }); setError(null); }
+      } catch (e) { if (vivo) setError(segMsgError(e)); }
+    })();
+    return () => { vivo = false; };
+  }, [fetcher, tick]);
+  useEffect(() => {
+    const f = (e) => { if (e.key === "Escape") setHoja(null); };
+    window.addEventListener("keydown", f);
+    return () => window.removeEventListener("keydown", f);
+  }, []);
+
+  const regs = useMemo(() => { const m = {}; if (datos) for (const r of datos.reg) m[r.id] = r; return m; }, [datos]);
+  const labelReg = (id) => (regs[id] && regs[id].label) || SEG_LABEL_FALLBACK[id] || id;
+  const nombreJefe = (id) => (regs[id] && regs[id].jefe_urs) || null;
+  const quien = (a) => (a === "gab" ? "Gabinete" : (nombreJefe(a) ? `${nombreJefe(a)} (${labelReg(a)})` : `Jefe/a URS · Región de ${labelReg(a)}`));
+
+  const items = useMemo(() => {
+    if (!datos) return [];
+    const por = {};
+    for (const a of datos.an) (por[a.proyecto_id] = por[a.proyecto_id] || []).push(a);
+    return datos.pr.map(p => {
+      const hist = (por[p.id] || []).slice().sort((x, y) => String(x.creado_en).localeCompare(String(y.creado_en)) || x.id - y.id);
+      let cur = null;
+      for (const a of hist) if ((a.tipo || "avance") === "avance" && !a.anulada) cur = a;
+      const est = !cur ? "sin" : (segDias(cur.fecha) > SEG_DIAS_DESACTUALIZADO ? "vie" : "ok");
+      const retiro = p.activo === false ? hist.filter(a => a.tipo === "retiro" && !a.anulada).pop() || null : null;
+      return { p, hist, cur, est, retiro, activo: p.activo !== false };
+    });
+  }, [datos]);
+
+  if (!creds) return <ConnectScreen onConnect={(url, key) => setCreds({ url, key })} />;
+  if (error && !datos) return (
+    <div className="seg"><style>{SEG_CSS}</style><div className="wrap"><h2>No se pudo cargar el seguimiento</h2><p className="meta">{error}</p>
+      <button type="button" className="btn main" onClick={() => { setError(null); setTick(t => t + 1); }}>Reintentar</button></div></div>
+  );
+  if (!datos) return <div className="seg"><style>{SEG_CSS}</style><div className="wrap"><p>Cargando seguimiento…</p></div></div>;
+
+  const esGab = as === "gab";
+  const asValido = esGab || SEG_ORDEN.includes(as);
+  const region = esGab ? drill : as;
+
+  const elegir = (a) => { try { localStorage.setItem("seg-as", a); } catch (e) { /* sin almacenamiento */ } setAs(a); setDrill(null); setLim(25); setFlt("all"); setQ(""); setCom(""); window.scrollTo(0, 0); };
+  const cambiar = () => { try { localStorage.removeItem("seg-as"); } catch (e) { /* ignorar */ } setAs(""); setDrill(null); setHoja(null); };
+  const mostrarToast = (msg, undo) => { setToast({ msg, undo }); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 8000); };
+  const recargar = () => setTick(t => t + 1);
+  const addAn = (row) => setDatos(d => ({ ...d, an: [...d.an, row] }));
+  const patchAn = (id, patch) => setDatos(d => ({ ...d, an: d.an.map(a => (a.id === id ? { ...a, ...patch } : a)) }));
+  const patchPr = (id, patch) => setDatos(d => ({ ...d, pr: d.pr.map(p => (p.id === id ? { ...p, ...patch } : p)) }));
+  const perfil = esGab ? "gabinete" : as;
+  const autor = quien(as);
+
+  async function nuevaAnotacion(it, campos) {
+    const [fila] = await fetcher.insertRow("seg_anotaciones", { proyecto_id: it.p.id, autor, perfil, ...campos });
+    addAn(fila);
+    return fila;
+  }
+  async function avanzar(it) {
+    const i = it.cur ? SEG_ETAPA_IDX[it.cur.etapa] : -1;
+    if (i < 0 || i >= SEG_ETAPAS.length - 1) return;
+    const sig = SEG_ETAPAS[i + 1];
+    try {
+      const fila = await nuevaAnotacion(it, { tipo: "avance", etapa: sig.id, fecha: segHoy(), nota: null });
+      mostrarToast(`Listo: ahora está en «${sig.n}».`, async () => { try { await fetcher.updateRow("seg_anotaciones", fila.id, { anulada: true }); patchAn(fila.id, { anulada: true }); } catch (e) { mostrarToast("No se pudo deshacer: " + segMsgError(e)); } });
+    } catch (e) { mostrarToast("No se pudo guardar: " + segMsgError(e)); }
+  }
+  async function reintegrar(it) {
+    try {
+      await nuevaAnotacion(it, { tipo: "reintegro", etapa: null, fecha: segHoy(), nota: null });
+      await fetcher.updateRow("seg_proyectos", it.p.id, { activo: true });
+      patchPr(it.p.id, { activo: true });
+      mostrarToast("Proyecto reintegrado al seguimiento.");
+    } catch (e) { mostrarToast("No se pudo reintegrar: " + segMsgError(e)); }
+  }
+
+  // ---------- Pantallas ----------
+  const activos = items.filter(x => x.activo);
+  const retirados = items.filter(x => !x.activo);
+
+  const Puerta = () => (
+    <>
+      <h2>¿Quién eres?</h2>
+      <p className="meta">Elige tu nombre para entrar.</p>
+      <div className="gate">
+        <button type="button" className="btn who-opt main" onClick={() => elegir("gab")}>Gabinete</button>
+        {SEG_ORDEN.map(id => (
+          <button key={id} type="button" className="btn who-opt" onClick={() => elegir(id)}>
+            {nombreJefe(id) ? <>{nombreJefe(id)}<br /><small className="meta">Región de {labelReg(id)}</small></> : <>Jefe/a URS · Región de {labelReg(id)}</>}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+
+  const Resumen = () => {
+    const por = {};
+    SEG_ORDEN.forEach(id => { por[id] = { t: 0, sin: 0, vie: 0, ok: 0, et: {} }; });
+    for (const x of activos) { const b = por[x.p.region_id]; if (!b) continue; b.t++; b[x.est]++; if (x.cur) b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; }
+    const T = { t: 0, sin: 0, vie: 0, ok: 0 };
+    SEG_ORDEN.forEach(id => ["t", "sin", "vie", "ok"].forEach(k => { T[k] += por[id][k]; }));
+    return (
+      <>
+        <div className="kpis">
+          <div className="kpi"><b>{T.t}</b><span>proyectos en seguimiento</span></div>
+          <div className="kpi"><b>{T.ok}</b><span>al día (actualizados en los últimos {SEG_DIAS_DESACTUALIZADO} días)</span></div>
+          <div className="kpi"><b>{T.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días sin anotar)</span></div>
+          <div className="kpi"><b>{T.sin}</b><span>sin actualizar (nunca anotados)</span></div>
+        </div>
+        <div className="actions" style={{ marginBottom: 18 }}>
+          <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
+          <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>Agregar un proyecto a mano</button>
+          {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Ver retirados ({retirados.length})</button>}
+        </div>
+        <h2>Avance de actualización por región</h2>
+        <p className="meta">Toca una región para ver sus proyectos.</p>
+        <div className="bars">
+          {SEG_ORDEN.map(id => { const b = por[id], pc = b.t ? Math.round(100 * b.ok / b.t) : 0; return (
+            <div key={id} className="bar" data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>
+              <button type="button">{labelReg(id)} · {b.ok} de {b.t}</button>
+              <div className="track" aria-hidden="true"><div className="fill" style={{ width: pc + "%" }} /></div>
+              <b>{pc}%</b>
+            </div>); })}
+        </div>
+        <h2>Proyectos por etapa de seguimiento</h2>
+        <div className="tw"><table>
+          <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{SEG_ETAPAS.map((e, i) => <th key={e.id} title={e.n}>Etapa {i + 1}</th>)}</tr></thead>
+          <tbody>
+            {SEG_ORDEN.map(id => { const b = por[id]; return (
+              <tr key={id} data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>
+                <td><button type="button">{labelReg(id)}</button></td><td>{b.t}</td><td>{b.sin}</td>{SEG_ETAPAS.map(e => <td key={e.id}>{b.et[e.id] || 0}</td>)}
+              </tr>); })}
+            <tr><td><b>Total</b></td><td><b>{T.t}</b></td><td><b>{T.sin}</b></td>{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (por[id].et[e.id] || 0), 0)}</b></td>)}</tr>
+          </tbody>
+        </table></div>
+        <p className="meta">Etapas: {SEG_ETAPAS.map((e, i) => `${i + 1} = ${e.n}`).join(" · ")}</p>
+      </>
+    );
+  };
+
+  const Tarjeta = ({ it }) => {
+    const { p, cur, est } = it;
+    const i = cur ? SEG_ETAPA_IDX[cur.etapa] : -1;
+    const sig = i >= 0 && i < SEG_ETAPAS.length - 1 ? SEG_ETAPAS[i + 1] : null;
+    if (!it.activo) return (
+      <article key={p.id} className="card">
+        <h3>{p.nombre}</h3>
+        <div className="meta">{p.comuna} · {p.programa}{SEG_LINEA[p.programa] && <> <span className="tag">{SEG_LINEA[p.programa]}</span></>} · {segClp(p.monto_subdere)} · {p.codigo ? "Código " + p.codigo : "Sin código"}</div>
+        <div className="meta">Retirado del seguimiento{it.retiro ? `: ${fmtFecha(it.retiro.fecha)} por ${it.retiro.autor}${it.retiro.nota ? `. Motivo: ${it.retiro.nota}` : ""}` : ""}</div>
+        <div className="actions"><button type="button" className="btn go" onClick={() => reintegrar(it)}>Reintegrar al seguimiento</button><button type="button" className="btn" onClick={() => setHoja({ tipo: "historial", id: p.id })}>Ver historial</button></div>
+      </article>
+    );
+    return (
+      <article key={p.id} className={"card " + est}>
+        <h3>{p.nombre}</h3>
+        <div className="meta">{p.comuna} · {p.programa}{SEG_LINEA[p.programa] && <> <span className="tag">{SEG_LINEA[p.programa]}</span></>} · {segClp(p.monto_subdere)} · {p.codigo ? "Código " + p.codigo : <span className="pill sin">Sin código, completar por URS</span>}</div>
+        <div className="row"><span className="meta">En qué está:</span><span className={"pill " + est}>{cur ? SEG_ETAPAS[SEG_ETAPA_IDX[cur.etapa]].n : "Sin actualizar"}</span></div>
+        {cur && <div className="meta">Última anotación: {fmtFecha(cur.fecha)} (hace {segDias(cur.fecha)} días){cur.autor ? ` · por ${cur.autor}` : ""}{cur.nota ? `. Nota: ${cur.nota}` : ""}</div>}
+        <div className="actions">
+          {sig && <button type="button" className="btn go" onClick={() => avanzar(it)}>Pasar a: {sig.n}</button>}
+          <button type="button" className="btn main" onClick={() => setHoja({ tipo: "actualizar", id: p.id })}>Actualizar Estado del Proyecto</button>
+          {!p.codigo && <button type="button" className="btn" onClick={() => setHoja({ tipo: "actualizar", id: p.id, foco: true })}>Ingresar código</button>}
+          {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "retiro", id: p.id })}>Retirar del seguimiento</button>}
+        </div>
+      </article>
+    );
+  };
+
+  const Lista = () => {
+    const base = region === "__ret" ? retirados : (flt === "ret" ? retirados.filter(x => x.p.region_id === region) : activos.filter(x => x.p.region_id === region));
+    const todas = (region === "__ret" ? retirados : items.filter(x => x.p.region_id === region));
+    const act = todas.filter(x => x.activo);
+    const cnt = { sin: 0, vie: 0, ok: 0 };
+    act.forEach(x => { cnt[x.est]++; });
+    const comunas = [...new Set(todas.map(x => x.p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
+    const ql = q.trim().toLowerCase();
+    const filtrados = base.filter(x => (!com || x.p.comuna === com) &&
+      (flt === "all" || flt === "ret" || (flt === "nocode" ? !x.p.codigo : x.est === flt)) &&
+      (!ql || `${x.p.nombre} ${x.p.comuna} ${x.p.codigo || ""}`.toLowerCase().includes(ql)));
+    const chips = [["all", "Todos"], ["sin", "Sin actualizar"], ["vie", "Desactualizados"], ["ok", "Al día"], ["nocode", "Sin código"]];
+    if (esGab) chips.push(["ret", `Retirados (${todas.filter(x => !x.activo).length})`]);
+    const titulo = region === "__ret" ? "Proyectos retirados del seguimiento" : `Región de ${labelReg(region)}`;
+    return (
+      <>
+        {esGab && <p><button type="button" className="btn" onClick={() => { setDrill(null); setFlt("all"); window.scrollTo(0, 0); }}>← Volver al resumen</button></p>}
+        <h2>{titulo}</h2>
+        {region !== "__ret" && <div className="kpis">
+          <div className="kpi"><b>{act.length}</b><span>proyectos en seguimiento</span></div>
+          <div className="kpi"><b>{cnt.sin}</b><span>sin actualizar</span></div>
+          <div className="kpi"><b>{cnt.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días)</span></div>
+          <div className="kpi"><b>{cnt.ok}</b><span>al día</span></div>
+        </div>}
+        {region !== "__ret" && (
+          <div className="actions" style={{ marginBottom: 12 }}>
+            <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar", region })}>Agregar un proyecto a mano</button>
+            <button type="button" className="btn" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
+          </div>
+        )}
+        {region !== "__ret" && <div className="chips" role="group" aria-label="Mostrar">
+          {chips.map(([k, l]) => <button key={k} type="button" className="chip" aria-pressed={flt === k} onClick={() => { setFlt(k); setLim(25); }}>{l}</button>)}
+        </div>}
+        <div className="filters">
+          <input type="search" placeholder="Buscar por nombre, comuna o código" value={q} onChange={e => { setQ(e.target.value); setLim(25); }} aria-label="Buscar" />
+          <select aria-label="Comuna" value={com} onChange={e => { setCom(e.target.value); setLim(25); }}>
+            <option value="">Todas las comunas</option>
+            {comunas.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <p className="meta">{filtrados.length} proyectos</p>
+        <div className="list">
+          {filtrados.length === 0 ? <div className="empty">No hay proyectos con este filtro.</div> : filtrados.slice(0, lim).map(it => Tarjeta({ it }))}
+          {filtrados.length > lim && <div className="more"><button type="button" className="btn" onClick={() => setLim(l => l + 25)}>Ver {Math.min(25, filtrados.length - lim)} más (faltan {filtrados.length - lim})</button></div>}
+        </div>
+      </>
+    );
+  };
+
+  const ctx = { datos, esGab, as, autor, fetcher, labelReg, recargar, setHoja, mostrarToast, nuevaAnotacion, patchAn, patchPr };
+  const hojaItem = hoja && hoja.id != null ? items.find(x => x.p.id === hoja.id) : null;
+
+  return (
+    <div className="seg">
+      <style>{SEG_CSS}</style>
+      <div className="wrap">
+        <div className="top"><h1>Seguimiento de proyectos asignados</h1></div>
+        {asValido && (
+          <div className="who">
+            <span>Estás como: <b>{quien(as)}</b></span>
+            <button type="button" className="btn sm" onClick={cambiar}>Cambiar</button>
+            {esGab && <button type="button" className="btn sm" onClick={() => { window.location.hash = ""; }}>← Volver al panel de gestión</button>}
+          </div>
+        )}
+        {error && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>No se pudo actualizar: {error}</p>}
+        {!asValido ? Puerta() : (esGab && !drill ? Resumen() : Lista())}
+        <p className="foot">Fuente de los proyectos: listado de SUBDERE en línea. Las etapas las anotan los jefes URS y el gabinete; no reemplazan a SUBDERE en línea. «Desactualizado» = más de {SEG_DIAS_DESACTUALIZADO} días sin anotar avance.</p>
+      </div>
+      {hoja && hoja.tipo === "actualizar" && hojaItem && <HojaActualizar ctx={ctx} it={hojaItem} foco={hoja.foco} />}
+      {hoja && hoja.tipo === "retiro" && hojaItem && <HojaRetiro ctx={ctx} it={hojaItem} />}
+      {hoja && hoja.tipo === "historial" && hojaItem && <HojaHistorial ctx={ctx} it={hojaItem} />}
+      {hoja && hoja.tipo === "agregar" && <HojaAgregar ctx={ctx} regionInicial={hoja.region} />}
+      {hoja && hoja.tipo === "carga" && <HojaCarga ctx={ctx} />}
+      {toast && (
+        <div className="toast"><span>{toast.msg}</span>
+          {toast.undo && <button type="button" onClick={() => { const u = toast.undo; setToast(null); u(); }}>Deshacer</button>}</div>
+      )}
+    </div>
+  );
+}
+
 function PanelURSInner() {
   const envUrl = import.meta.env.VITE_SUPABASE_URL;
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -1703,6 +2423,7 @@ function PanelURSInner() {
             <div style={{ fontSize: 11, color: TEAL, fontWeight: 700, letterSpacing: 1.5 }}>SUBDERE — DIVISIÓN DE MUNICIPALIDADES</div>
             <h1 style={{ fontSize: 24, fontWeight: 800, color: NAVY, margin: "2px 0 0" }}>Panel de Gestión URS</h1>
             <div style={{ fontSize: 12, color: "#666" }}>Prototipo — cobertura: 3 de 16 regiones (datos verificados a ago-2026)</div>
+            <button onClick={() => { window.location.hash = "seguimiento"; window.scrollTo(0, 0); }} style={{ marginTop: 8, border: `2px solid ${NAVY}`, background: "white", color: NAVY, cursor: "pointer", padding: "7px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}>Seguimiento de proyectos →</button>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {Object.entries(regions).map(([key, r]) => (
@@ -1735,9 +2456,16 @@ function PanelURSInner() {
 }
 
 export default function PanelURS() {
+  // La sección "Seguimiento de proyectos" vive en la misma dirección con #seguimiento
+  const [hash, setHash] = useState(window.location.hash);
+  useEffect(() => {
+    const f = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", f);
+    return () => window.removeEventListener("hashchange", f);
+  }, []);
   return (
     <ErrorBoundary>
-      <PanelURSInner />
+      {hash === "#seguimiento" ? <SeguimientoInner /> : <PanelURSInner />}
     </ErrorBoundary>
   );
 }

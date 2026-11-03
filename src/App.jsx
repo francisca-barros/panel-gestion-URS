@@ -1918,6 +1918,14 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .dform{background: var(--panel); border: 1px solid var(--line); padding: 4px 12px 12px; margin: 8px 0;}
 .seg .resumen-det{font-size: 14px; display: grid; gap: 2px;}
 .seg .detprom{color: var(--ok); font-weight: 700;}
+.seg .tcom td{text-align: left; white-space: normal; vertical-align: top;}
+.seg .tcom th{text-align: left; white-space: nowrap;}
+.seg .tcom td.tcom-nombre{min-width: 260px;}
+.seg .tcom td:first-child{position: static; background: transparent;}
+.seg .tcom th:first-child{position: static; background: var(--panel);}
+.seg .tcom tr.tcom-grupo td{background: var(--panel); font-weight: 700; color: var(--primary); position: static;}
+.seg .tcom tbody tr:hover td{background: transparent;}
+.seg .tcom tr.tcom-grupo:hover td{background: var(--panel);}
 `;
 
 function Hoja({ children, titulo, onClose }) {
@@ -2697,30 +2705,53 @@ function SeguimientoInner() {
           {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>}
         </div>
         {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
-        {soloCD && nCD > 0 && <p className="meta">Toca una región de la tabla para ver aquí sus proyectos Chile Despega.</p>}
+        <p className="meta">Toca una región de la tabla para ver aquí el listado de sus proyectos{soloCD ? " Chile Despega" : ""}, por comuna.</p>
         <div className="tw"><table>
           <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
           <tbody>
             {SEG_ORDEN.map(id => { const b = porT[id]; return (
-              <tr key={id} data-drill="1" aria-selected={soloCD && cdRegion === id} style={soloCD && cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
-                onClick={() => { if (soloCD) { setCdRegion(cdRegion === id ? null : id); setLim(25); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); } else { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); } }}>
+              <tr key={id} data-drill="1" aria-selected={cdRegion === id} style={cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
+                onClick={() => { setCdRegion(cdRegion === id ? null : id); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>
                 <td><button type="button">{labelReg(id)}</button></td><td>{b.t}</td><td>{b.sin}</td>{SEG_ETAPAS.map(e => <td key={e.id}>{b.et[e.id] || 0}</td>)}
               </tr>); })}
             <tr><td><b>Total</b></td><td><b>{TT.t}</b></td><td><b>{TT.sin}</b></td>{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (porT[id].et[e.id] || 0), 0)}</b></td>)}</tr>
           </tbody>
         </table></div>
-        {soloCD && cdRegion && (() => {
-          const lista = activos.filter(x => x.p.region_id === cdRegion && x.p.chile_despega);
+        {cdRegion && (() => {
+          const lista = activos.filter(x => x.p.region_id === cdRegion && (!soloCD || x.p.chile_despega))
+            .sort((a, b) => a.p.comuna.localeCompare(b.p.comuna, "es") || a.p.nombre.localeCompare(b.p.nombre, "es"));
+          const porComuna = [];
+          for (const x of lista) { const g = porComuna[porComuna.length - 1]; if (g && g.comuna === x.p.comuna) g.items.push(x); else porComuna.push({ comuna: x.p.comuna, items: [x] }); }
+          const total = lista.reduce((a, x) => a + (Number(x.p.monto_subdere) || 0), 0);
           return (
             <div id="seg-cd-lista" style={{ marginTop: 16 }}>
-              <h2>Chile Despega · Región de {labelReg(cdRegion)} ({lista.length})</h2>
-              <div className="list">
-                {lista.length === 0 ? <div className="empty">Esta región no tiene proyectos Chile Despega.</div> : lista.slice(0, lim).map(it => Tarjeta({ it }))}
-                {lista.length > lim && <div className="more"><button type="button" className="btn" onClick={() => setLim(l => l + 25)}>Ver {Math.min(25, lista.length - lim)} más (faltan {lista.length - lim})</button></div>}
-              </div>
+              <h2>{soloCD ? "Proyectos Chile Despega" : "Proyectos"} · Región de {labelReg(cdRegion)} ({lista.length})</h2>
+              {lista.length === 0 ? <div className="empty">Esta región no tiene proyectos{soloCD ? " Chile Despega" : ""}.</div> : (
+                <div className="tw"><table className="tcom">
+                  <thead><tr><th>Comuna</th><th>Proyecto</th><th>Programa</th><th>Monto SUBDERE</th><th>Código</th><th>Etapa</th></tr></thead>
+                  <tbody>
+                    {porComuna.map(g => (
+                      <React.Fragment key={g.comuna}>
+                        <tr className="tcom-grupo"><td colSpan={6}>{g.comuna} · {g.items.length} {g.items.length > 1 ? "proyectos" : "proyecto"}</td></tr>
+                        {g.items.map(x => (
+                          <tr key={x.p.id}>
+                            <td>{x.p.comuna}</td>
+                            <td className="tcom-nombre">{x.p.nombre}{x.p.chile_despega && !soloCD && <> <span className="tag">Chile Despega</span></>}</td>
+                            <td>{x.p.programa}{SEG_LINEA[x.p.programa] && <> <span className="tag">{SEG_LINEA[x.p.programa]}</span></>}</td>
+                            <td>{x.p.monto_subdere ? "$" + Number(x.p.monto_subdere).toLocaleString("es-CL") : "—"}</td>
+                            <td>{x.p.codigo || "—"}</td>
+                            <td>{x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar"}</td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                    <tr><td colSpan={3}><b>Total ({lista.length} proyectos)</b></td><td><b>{"$" + total.toLocaleString("es-CL")}</b></td><td colSpan={2} /></tr>
+                  </tbody>
+                </table></div>
+              )}
               <div className="actions" style={{ marginTop: 10 }}>
-                <button type="button" className="btn" onClick={() => setCdRegion(null)}>Cerrar lista</button>
-                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>Ver todos los proyectos de la región</button>
+                <button type="button" className="btn" onClick={() => setCdRegion(null)}>Cerrar listado</button>
+                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>Ir a actualizar los proyectos de la región</button>
               </div>
             </div>
           );

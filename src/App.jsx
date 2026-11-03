@@ -1720,7 +1720,8 @@ const segTitulo = (s) => String(s == null ? "" : s).trim().toLowerCase().split(/
 const segMsgError = (e) => {
   const t = String((e && e.message) || e);
   if (/23505|duplicate key/i.test(t)) return "Ese código ya existe en otro proyecto.";
-  if (/42501|row-level security/i.test(t)) return "Falta el permiso en la base de datos (ejecutar seguimiento_esquema.sql).";
+  if (/42501|row-level security/i.test(t)) return "Falta el permiso en la base de datos (ejecutar seguimiento_esquema.sql y seguimiento_detalle.sql).";
+  if (/PGRST20[45]|does not exist|Could not find the table|Could not find the .* column/i.test(t)) return "Falta crear las tablas o columnas nuevas en la base de datos (ejecutar seguimiento_detalle.sql).";
   return t;
 };
 
@@ -1904,7 +1905,17 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .gate{display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin-top: 12px;}
 .seg .who[hidden], .seg .note[hidden]{display: none;}
 .seg .who-opt{text-align: left; font-size: 17px; min-height: 56px;}
-.seg .who{display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 16px;}`;
+.seg .who{display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 16px;}
+.seg .dsec{border: 2px solid var(--line); margin: 0 0 10px;}
+.seg .dtit{display: block; width: 100%; text-align: left; background: var(--panel); border: 0; padding: 12px; min-height: 48px; font-weight: 700; cursor: pointer; color: var(--primary);}
+.seg .dbody{padding: 12px;}
+.seg .detlista{list-style: none; padding: 0; margin: 0 0 10px;}
+.seg .detfila{display: flex; flex-wrap: wrap; gap: 6px 10px; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px;}
+.seg .detbtn{display: flex; gap: 6px; flex-wrap: wrap;}
+.seg .dform{background: var(--panel); border: 1px solid var(--line); padding: 4px 12px 12px; margin: 8px 0;}
+.seg .resumen-det{font-size: 14px; display: grid; gap: 2px;}
+.seg .detprom{color: var(--ok); font-weight: 700;}
+`;
 
 function Hoja({ children, titulo, onClose }) {
   return (
@@ -2123,6 +2134,356 @@ function HojaCarga({ ctx }) {
     );
 }
 
+// ---------- Detalle por etapa (licitación, adjudicación, contrato, obras) ----------
+const SEG_RESULTADO = { en_curso: "En curso", desierta: "Desierta", adjudicada: "Adjudicada" };
+const SEG_TIPO_CONTRATO = {
+  inicial: "Contrato inicial",
+  modificacion_plazo: "Modificación: aumento de plazo",
+  modificacion_monto: "Modificación: cambio de monto",
+  paralizacion: "Paralización de obra",
+};
+const segNum = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : null; };
+const segEntero = (v) => { const n = parseInt(String(v).replace(/[^\d-]/g, ""), 10); return Number.isFinite(n) ? n : null; };
+const segClpSigno = (n) => (n < 0 ? "−$" : "+$") + Math.abs(n).toLocaleString("es-CL");
+
+function segTextoContrato(r) {
+  const f = fmtFecha;
+  const nota = r.nota ? ` (${r.nota})` : "";
+  if (r.tipo === "inicial") return `Contrato inicial: inicio ${f(r.fecha_inicio)}, plazo ${r.plazo_dias} días, término ${f(r.fecha_termino)}${nota}`;
+  if (r.tipo === "modificacion_plazo") return `Aumento de plazo (${f(r.fecha_modificacion)}): +${r.plazo_dias} días, nuevo término ${f(r.fecha_termino)}${nota}`;
+  if (r.tipo === "modificacion_monto") return `Cambio de monto (${f(r.fecha_modificacion)}): ${segClpSigno(r.monto_modificacion)}${nota}`;
+  return `Paralización: desde ${f(r.fecha_paralizacion)}, ${r.fecha_reinicio ? `reinicio ${f(r.fecha_reinicio)}` : "sin reinicio aún"}${nota}`;
+}
+// Líneas de resumen que se muestran en la tarjeta
+function segResumenDetalle(p, lic, con, ep) {
+  const out = [];
+  if (lic.length) {
+    const u = lic[lic.length - 1];
+    out.push(`Licitación: ${lic.length} ${lic.length > 1 ? "procesos" : "proceso"}. Último (N° ${u.numero}): publicación ${fmtFecha(u.fecha_publicacion)}${u.fecha_apertura ? `, apertura ${fmtFecha(u.fecha_apertura)}` : ""} — ${SEG_RESULTADO[u.resultado] || u.resultado}`);
+  }
+  if (p.adj_fecha) out.push(`Decreto de adjudicación: ${fmtFecha(p.adj_fecha)}${p.adj_n_decreto ? ` (N° ${p.adj_n_decreto})` : ""}`);
+  if (con.length) {
+    const conTermino = con.filter(r => r.fecha_termino);
+    const vig = conTermino[conTermino.length - 1];
+    const ini = con.find(r => r.tipo === "inicial");
+    const nMod = con.filter(r => r.tipo !== "inicial").length;
+    if (vig) out.push(`Contrato: término ${fmtFecha(vig.fecha_termino)}${ini ? ` (plazo inicial ${ini.plazo_dias} días)` : ""}${nMod ? ` · ${nMod} ${nMod > 1 ? "modificaciones" : "modificación"}` : ""}`);
+    else if (nMod) out.push(`Contrato: ${nMod} ${nMod > 1 ? "modificaciones" : "modificación"}`);
+    const par = con.filter(r => r.tipo === "paralizacion" && !r.fecha_reinicio).pop();
+    if (par) out.push(`⚠ Obra paralizada desde ${fmtFecha(par.fecha_paralizacion)}`);
+  }
+  if (ep.length) {
+    const u = ep.slice().sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || a.numero - b.numero).pop();
+    out.push(`Avance: ${String(u.pct_avance).replace(".", ",")}% — estado de pago N° ${u.numero} (${fmtFecha(u.fecha)})`);
+  }
+  return out;
+}
+
+function DetFila({ children, onEdit, onQuitar }) {
+  const [conf, setConf] = useState(false);
+  return (
+    <li className="detfila">
+      <span>{children}</span>
+      <span className="detbtn">
+        <button type="button" className="btn sm" onClick={onEdit}>Editar</button>
+        <button type="button" className="btn sm" onClick={() => { if (!conf) { setConf(true); return; } onQuitar(); }}>{conf ? "¿Seguro? Toca otra vez" : "Quitar"}</button>
+      </span>
+    </li>
+  );
+}
+function Campo({ id, label, ayuda, children }) {
+  return <div className="fld"><label htmlFor={id}>{label}</label>{children}{ayuda && <p className="meta">{ayuda}</p>}</div>;
+}
+function FormBotones({ busy, onGuardar, onCancelar, texto }) {
+  return <div className="actions"><button type="button" className="btn main" disabled={busy} onClick={onGuardar}>{busy ? "Guardando…" : (texto || "Guardar")}</button><button type="button" className="btn" onClick={onCancelar}>Cancelar</button></div>;
+}
+const segErr = (err) => err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>;
+
+function LicForm({ ctx, it, fila, sugerido, onDone }) {
+  const [numero, setNumero] = useState(fila ? String(fila.numero) : String(sugerido));
+  const [pub, setPub] = useState(fila ? fila.fecha_publicacion || "" : "");
+  const [ape, setApe] = useState(fila ? fila.fecha_apertura || "" : "");
+  const [res, setRes] = useState(fila ? fila.resultado : "en_curso");
+  const [nota, setNota] = useState(fila ? fila.nota || "" : "");
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  async function guardar() {
+    const n = segEntero(numero);
+    if (!n || n < 1) { setErr("Indica el número del proceso (1, 2, 3…)."); return; }
+    if (!pub) { setErr("Indica la fecha de publicación."); return; }
+    if (ape && ape < pub) { setErr("La fecha de apertura no puede ser anterior a la de publicación."); return; }
+    setBusy(true); setErr("");
+    try { await ctx.guardarDet("lic", "seg_licitaciones", fila && fila.id, { numero: n, fecha_publicacion: pub, fecha_apertura: ape || null, resultado: res, nota: nota.trim() || null }, it); onDone(); }
+    catch (e) { setErr(segMsgError(e)); setBusy(false); }
+  }
+  return (
+    <div className="dform">
+      <Campo id="l-n" label="N° del proceso de licitación"><input type="text" inputMode="numeric" id="l-n" value={numero} onChange={e => setNumero(e.target.value)} /></Campo>
+      <Campo id="l-p" label="Fecha de publicación"><input type="date" id="l-p" value={pub} onChange={e => setPub(e.target.value)} /></Campo>
+      <Campo id="l-a" label="Fecha de apertura (cierre de ofertas)"><input type="date" id="l-a" value={ape} onChange={e => setApe(e.target.value)} /></Campo>
+      <Campo id="l-r" label="Resultado del proceso">
+        <select id="l-r" value={res} onChange={e => setRes(e.target.value)}>{Object.entries(SEG_RESULTADO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+      </Campo>
+      <Campo id="l-o" label="Nota (opcional)"><textarea id="l-o" value={nota} onChange={e => setNota(e.target.value)} /></Campo>
+      {segErr(err)}
+      <FormBotones busy={busy} onGuardar={guardar} onCancelar={onDone} />
+    </div>
+  );
+}
+function SecLic({ ctx, it }) {
+  const [edit, setEdit] = useState(null);
+  return (
+    <>
+      <p className="meta">Si el proyecto se adjudica en el segundo o tercer proceso, agrega cada proceso por separado.</p>
+      {it.lic.length === 0 && !edit && <p className="meta">Sin procesos anotados.</p>}
+      <ul className="detlista">
+        {it.lic.map(r => (
+          <DetFila key={r.id} onEdit={() => setEdit(r)} onQuitar={async () => { try { await ctx.quitarDet("lic", "seg_licitaciones", r.id); } catch (e) { ctx.mostrarToast("No se pudo quitar: " + segMsgError(e)); } }}>
+            <b>Proceso N° {r.numero}</b>: publicación {fmtFecha(r.fecha_publicacion)}{r.fecha_apertura ? `, apertura ${fmtFecha(r.fecha_apertura)}` : ""} — {SEG_RESULTADO[r.resultado] || r.resultado}{r.nota ? ` (${r.nota})` : ""}
+          </DetFila>
+        ))}
+      </ul>
+      {edit ? <LicForm key={edit.id || "nuevo"} ctx={ctx} it={it} fila={edit.id ? edit : null} sugerido={it.lic.length ? Math.max(...it.lic.map(r => r.numero)) + 1 : 1} onDone={() => setEdit(null)} />
+        : <button type="button" className="btn" onClick={() => setEdit({})}>+ Agregar proceso de licitación</button>}
+    </>
+  );
+}
+
+function SecAdj({ ctx, it }) {
+  const [abierto, setAbierto] = useState(false);
+  const [fecha, setFecha] = useState(it.p.adj_fecha || "");
+  const [dec, setDec] = useState(it.p.adj_n_decreto || "");
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  async function guardar(borrar) {
+    if (!borrar) {
+      if (!fecha) { setErr("Indica la fecha del decreto de adjudicación."); return; }
+      if (fecha > segHoy()) { setErr("La fecha del decreto no puede ser futura."); return; }
+    }
+    setBusy(true); setErr("");
+    try { await ctx.guardarAdj(it, borrar ? { adj_fecha: null, adj_n_decreto: null } : { adj_fecha: fecha, adj_n_decreto: dec.trim() || null }); if (borrar) { setFecha(""); setDec(""); } setAbierto(false); setBusy(false); }
+    catch (e) { setErr(segMsgError(e)); setBusy(false); }
+  }
+  return (
+    <>
+      {it.p.adj_fecha ? <p className="meta">Decreto de adjudicación: <b>{fmtFecha(it.p.adj_fecha)}</b>{it.p.adj_n_decreto ? ` · N° ${it.p.adj_n_decreto}` : ""}</p> : <p className="meta">Sin decreto de adjudicación anotado.</p>}
+      {abierto ? (
+        <div className="dform">
+          <Campo id="a-f" label="Fecha del decreto de adjudicación"><input type="date" id="a-f" value={fecha} max={segHoy()} onChange={e => setFecha(e.target.value)} /></Campo>
+          <Campo id="a-d" label="N° del decreto (opcional)"><input type="text" id="a-d" value={dec} onChange={e => setDec(e.target.value)} autoComplete="off" /></Campo>
+          {segErr(err)}
+          <FormBotones busy={busy} onGuardar={() => guardar(false)} onCancelar={() => setAbierto(false)} />
+        </div>
+      ) : (
+        <div className="actions">
+          <button type="button" className="btn" onClick={() => setAbierto(true)}>{it.p.adj_fecha ? "Editar decreto de adjudicación" : "+ Anotar decreto de adjudicación"}</button>
+          {it.p.adj_fecha && <button type="button" className="btn sm" disabled={busy} onClick={() => guardar(true)}>Quitar</button>}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ConForm({ ctx, it, fila, onDone }) {
+  const hayInicial = it.con.some(r => r.tipo === "inicial" && (!fila || r.id !== fila.id));
+  const [tipo, setTipo] = useState(fila ? fila.tipo : (hayInicial ? "modificacion_plazo" : "inicial"));
+  const [fIni, setFIni] = useState(fila ? fila.fecha_inicio || "" : "");
+  const [plazo, setPlazo] = useState(fila && fila.plazo_dias != null ? String(fila.plazo_dias) : "");
+  const [fTer, setFTer] = useState(fila ? fila.fecha_termino || "" : "");
+  const [fMod, setFMod] = useState(fila ? fila.fecha_modificacion || "" : "");
+  const [monto, setMonto] = useState(fila && fila.monto_modificacion != null ? String(fila.monto_modificacion) : "");
+  const [fPar, setFPar] = useState(fila ? fila.fecha_paralizacion || "" : "");
+  const [fRei, setFRei] = useState(fila ? fila.fecha_reinicio || "" : "");
+  const [nota, setNota] = useState(fila ? fila.nota || "" : "");
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  async function guardar() {
+    const d = { tipo, fecha_inicio: null, plazo_dias: null, fecha_termino: null, fecha_modificacion: null, monto_modificacion: null, fecha_paralizacion: null, fecha_reinicio: null, nota: nota.trim() || null };
+    if (tipo === "inicial") {
+      const pz = segEntero(plazo);
+      if (!fIni || !pz || pz < 1 || !fTer) { setErr("Indica fecha de inicio, plazo en días y fecha de término."); return; }
+      if (fTer < fIni) { setErr("La fecha de término no puede ser anterior a la de inicio."); return; }
+      Object.assign(d, { fecha_inicio: fIni, plazo_dias: pz, fecha_termino: fTer });
+    } else if (tipo === "modificacion_plazo") {
+      const pz = segEntero(plazo);
+      if (!fMod || !pz || pz < 1 || !fTer) { setErr("Indica la fecha de la modificación, los días de aumento y la nueva fecha de término."); return; }
+      Object.assign(d, { fecha_modificacion: fMod, plazo_dias: pz, fecha_termino: fTer });
+    } else if (tipo === "modificacion_monto") {
+      const m = segEntero(monto);
+      if (!fMod || !m) { setErr("Indica la fecha de la modificación y el monto (con signo menos si disminuye)."); return; }
+      Object.assign(d, { fecha_modificacion: fMod, monto_modificacion: m });
+    } else {
+      if (!fPar) { setErr("Indica la fecha de paralización."); return; }
+      if (fRei && fRei < fPar) { setErr("La fecha de reinicio no puede ser anterior a la de paralización."); return; }
+      Object.assign(d, { fecha_paralizacion: fPar, fecha_reinicio: fRei || null });
+    }
+    setBusy(true); setErr("");
+    try { await ctx.guardarDet("con", "seg_contratos", fila && fila.id, d, it); onDone(); }
+    catch (e) { setErr(segMsgError(e)); setBusy(false); }
+  }
+  return (
+    <div className="dform">
+      <Campo id="c-t" label="¿Qué quieres anotar?">
+        <select id="c-t" value={tipo} disabled={!!fila} onChange={e => { setTipo(e.target.value); setErr(""); }}>
+          {Object.entries(SEG_TIPO_CONTRATO).filter(([k]) => k !== "inicial" || !hayInicial).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+      </Campo>
+      {tipo === "inicial" && <>
+        <Campo id="c-i" label="Fecha de inicio"><input type="date" id="c-i" value={fIni} onChange={e => setFIni(e.target.value)} /></Campo>
+        <Campo id="c-p" label="Plazo (días)"><input type="text" inputMode="numeric" id="c-p" value={plazo} onChange={e => setPlazo(e.target.value)} /></Campo>
+        <Campo id="c-f" label="Fecha de término"><input type="date" id="c-f" value={fTer} onChange={e => setFTer(e.target.value)} /></Campo>
+      </>}
+      {tipo === "modificacion_plazo" && <>
+        <Campo id="c-m" label="Fecha de la modificación"><input type="date" id="c-m" value={fMod} onChange={e => setFMod(e.target.value)} /></Campo>
+        <Campo id="c-p" label="Días de aumento"><input type="text" inputMode="numeric" id="c-p" value={plazo} onChange={e => setPlazo(e.target.value)} /></Campo>
+        <Campo id="c-f" label="Nueva fecha de término"><input type="date" id="c-f" value={fTer} onChange={e => setFTer(e.target.value)} /></Campo>
+      </>}
+      {tipo === "modificacion_monto" && <>
+        <Campo id="c-m" label="Fecha de la modificación"><input type="date" id="c-m" value={fMod} onChange={e => setFMod(e.target.value)} /></Campo>
+        <Campo id="c-$" label="Aumento o disminución del monto (pesos)" ayuda="Escribe el monto con signo menos si el contrato disminuye. Ejemplo: 2500000 o -1000000."><input type="text" id="c-$" value={monto} onChange={e => setMonto(e.target.value)} /></Campo>
+      </>}
+      {tipo === "paralizacion" && <>
+        <Campo id="c-a" label="Fecha de paralización"><input type="date" id="c-a" value={fPar} onChange={e => setFPar(e.target.value)} /></Campo>
+        <Campo id="c-r" label="Fecha de reinicio" ayuda="Déjala vacía si la obra sigue paralizada."><input type="date" id="c-r" value={fRei} onChange={e => setFRei(e.target.value)} /></Campo>
+      </>}
+      <Campo id="c-o" label="Nota (opcional)"><textarea id="c-o" value={nota} onChange={e => setNota(e.target.value)} /></Campo>
+      {segErr(err)}
+      <FormBotones busy={busy} onGuardar={guardar} onCancelar={onDone} />
+    </div>
+  );
+}
+function SecCon({ ctx, it }) {
+  const [edit, setEdit] = useState(null);
+  return (
+    <>
+      <p className="meta">Aquí va toda la información del contrato: el contrato inicial y cada modificación (plazo, monto, paralización).</p>
+      {it.con.length === 0 && !edit && <p className="meta">Sin información de contrato anotada.</p>}
+      <ul className="detlista">
+        {it.con.map(r => (
+          <DetFila key={r.id} onEdit={() => setEdit(r)} onQuitar={async () => { try { await ctx.quitarDet("con", "seg_contratos", r.id); } catch (e) { ctx.mostrarToast("No se pudo quitar: " + segMsgError(e)); } }}>
+            {segTextoContrato(r)}
+          </DetFila>
+        ))}
+      </ul>
+      {edit ? <ConForm key={edit.id || "nuevo"} ctx={ctx} it={it} fila={edit.id ? edit : null} onDone={() => setEdit(null)} />
+        : <button type="button" className="btn" onClick={() => setEdit({})}>+ Agregar contrato o modificación</button>}
+    </>
+  );
+}
+
+function EpForm({ ctx, it, fila, sugerido, onDone }) {
+  const [numero, setNumero] = useState(fila ? String(fila.numero) : String(sugerido));
+  const [fecha, setFecha] = useState(fila ? fila.fecha : segHoy());
+  const [pct, setPct] = useState(fila ? String(fila.pct_avance).replace(".", ",") : "");
+  const [nota, setNota] = useState(fila ? fila.nota || "" : "");
+  const [aviso, setAviso] = useState("");
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  async function guardar() {
+    const n = segEntero(numero), p = segNum(pct);
+    if (!n || n < 1) { setErr("Indica el N° del estado de pago (1, 2, 3…)."); return; }
+    if (!fecha) { setErr("Indica la fecha del estado de pago."); return; }
+    if (fecha > segHoy()) { setErr("La fecha del estado de pago no puede ser futura."); return; }
+    if (p == null || p < 0 || p > 100) { setErr("El porcentaje de avance debe estar entre 0 y 100."); return; }
+    if (!aviso) {
+      const otros = it.ep.filter(r => !fila || r.id !== fila.id);
+      const choque = otros.find(r => (r.fecha < fecha && Number(r.pct_avance) > p) || (r.fecha > fecha && Number(r.pct_avance) < p));
+      if (choque) { setAviso(`Ojo: el estado de pago N° ${choque.numero} (${fmtFecha(choque.fecha)}) tiene ${String(choque.pct_avance).replace(".", ",")}% y el avance no debería bajar con el tiempo. Revisa el dato; si está correcto, vuelve a guardar.`); return; }
+    }
+    setBusy(true); setErr("");
+    try { await ctx.guardarDet("ep", "seg_estados_pago", fila && fila.id, { numero: n, fecha, pct_avance: p, nota: nota.trim() || null }, it); onDone(); }
+    catch (e) { setErr(segMsgError(e)); setBusy(false); }
+  }
+  return (
+    <div className="dform">
+      <Campo id="e-n" label="N° del estado de pago"><input type="text" inputMode="numeric" id="e-n" value={numero} onChange={e => { setNumero(e.target.value); setAviso(""); }} /></Campo>
+      <Campo id="e-f" label="Fecha del estado de pago"><input type="date" id="e-f" value={fecha} max={segHoy()} onChange={e => { setFecha(e.target.value); setAviso(""); }} /></Campo>
+      <Campo id="e-p" label="Porcentaje de avance (%)" ayuda="Entre 0 y 100. Ejemplo: 45 o 45,5."><input type="text" inputMode="decimal" id="e-p" value={pct} onChange={e => { setPct(e.target.value); setAviso(""); }} /></Campo>
+      <Campo id="e-o" label="Nota (opcional)"><textarea id="e-o" value={nota} onChange={e => setNota(e.target.value)} /></Campo>
+      {aviso && <p className="meta" style={{ background: "var(--accent)", color: "var(--onaccent)", padding: 8, fontWeight: 700 }}>{aviso}</p>}
+      {segErr(err)}
+      <FormBotones busy={busy} onGuardar={guardar} onCancelar={onDone} texto={aviso ? "Guardar de todos modos" : "Guardar"} />
+    </div>
+  );
+}
+function SecEp({ ctx, it }) {
+  const [edit, setEdit] = useState(null);
+  const orden = it.ep.slice().sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || a.numero - b.numero);
+  return (
+    <>
+      <p className="meta">Una línea por cada estado de pago: su fecha y el porcentaje de avance de la obra.</p>
+      {orden.length === 0 && !edit && <p className="meta">Sin estados de pago anotados.</p>}
+      <ul className="detlista">
+        {orden.map(r => (
+          <DetFila key={r.id} onEdit={() => setEdit(r)} onQuitar={async () => { try { await ctx.quitarDet("ep", "seg_estados_pago", r.id); } catch (e) { ctx.mostrarToast("No se pudo quitar: " + segMsgError(e)); } }}>
+            <b>Estado de pago N° {r.numero}</b>: {fmtFecha(r.fecha)} — avance {String(r.pct_avance).replace(".", ",")}%{r.nota ? ` (${r.nota})` : ""}
+          </DetFila>
+        ))}
+      </ul>
+      {edit ? <EpForm key={edit.id || "nuevo"} ctx={ctx} it={it} fila={edit.id ? edit : null} sugerido={orden.length ? Math.max(...orden.map(r => r.numero)) + 1 : 1} onDone={() => setEdit(null)} />
+        : <button type="button" className="btn" onClick={() => setEdit({})}>+ Agregar estado de pago</button>}
+    </>
+  );
+}
+
+function HojaDetalle({ ctx, it }) {
+  const etapa = it.cur ? it.cur.etapa : "licitacion";
+  const [sec, setSec] = useState({ licitacion: "lic", adjudicado: "adj", contratado: "con", obras: "ep", cierre: "ep" }[etapa] || "lic");
+  const secciones = [["lic", "1. En licitación"], ["adj", "2. Adjudicado"], ["con", "3. Contratado"], ["ep", "4. En obras"]];
+  return (
+    <Hoja titulo="Detalle del proyecto" onClose={() => ctx.setHoja(null)}>
+      <h2>{it.p.nombre}</h2>
+      <p className="meta">{it.p.comuna} · {it.p.programa}</p>
+      <p className="meta">Todo esto es opcional. Anota lo que tengas; puedes volver cuando haya novedades.</p>
+      {secciones.map(([k, l]) => (
+        <div key={k} className="dsec">
+          <button type="button" className="dtit" aria-expanded={sec === k} onClick={() => setSec(sec === k ? "" : k)}>{sec === k ? "▼" : "▶"} {l}</button>
+          {sec === k && <div className="dbody">
+            {k === "lic" && <SecLic ctx={ctx} it={it} />}
+            {k === "adj" && <SecAdj ctx={ctx} it={it} />}
+            {k === "con" && <SecCon ctx={ctx} it={it} />}
+            {k === "ep" && <SecEp ctx={ctx} it={it} />}
+          </div>}
+        </div>
+      ))}
+      <div className="actions"><button type="button" className="btn main" onClick={() => ctx.setHoja(null)}>Cerrar</button></div>
+    </Hoja>
+  );
+}
+
+// Marcar proyectos "Chile Despega" pegando una lista de códigos (solo gabinete)
+function HojaCD({ ctx }) {
+  const { datos, fetcher, setHoja, mostrarToast, patchPrVarios } = ctx;
+  const [txt, setTxt] = useState("");
+  const [reemplazar, setReemplazar] = useState(false);
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const porCodigo = {};
+  for (const p of datos.pr) if (p.codigo) porCodigo[p.codigo] = p;
+  const codigos = [...new Set(txt.split(/[\n\r\t;]+/).map(s => s.trim()).filter(Boolean))];
+  const hallados = codigos.filter(c => porCodigo[c]), noHallados = codigos.filter(c => !porCodigo[c]);
+  const aMarcar = hallados.map(c => porCodigo[c]).filter(p => !p.chile_despega);
+  const idsLista = new Set(hallados.map(c => porCodigo[c].id));
+  const aQuitar = reemplazar ? datos.pr.filter(p => p.chile_despega && !idsLista.has(p.id)) : [];
+  async function parchar(ids, valor) {
+    for (let i = 0; i < ids.length; i += 150) await fetcher.updateWhere("seg_proyectos", `id=in.(${ids.slice(i, i + 150).join(",")})`, { chile_despega: valor });
+  }
+  async function aplicar() {
+    setBusy(true); setErr("");
+    try {
+      await parchar(aMarcar.map(p => p.id), true); patchPrVarios(aMarcar.map(p => p.id), true);
+      await parchar(aQuitar.map(p => p.id), false); patchPrVarios(aQuitar.map(p => p.id), false);
+      setHoja(null); mostrarToast(`Listo: ${aMarcar.length} marcados${aQuitar.length ? `, ${aQuitar.length} desmarcados` : ""}.`);
+    } catch (e) { setErr(segMsgError(e)); setBusy(false); }
+  }
+  return (
+    <Hoja titulo="Marcar proyectos Chile Despega" onClose={() => setHoja(null)}>
+      <h2>Marcar proyectos Chile Despega</h2>
+      <p className="meta">Pega aquí los códigos de los proyectos (uno por línea; puedes copiar la columna desde Excel). Hoy hay {datos.pr.filter(p => p.chile_despega).length} marcados.</p>
+      <div className="fld"><label htmlFor="cd-t">Códigos de proyecto</label><textarea id="cd-t" style={{ minHeight: 160 }} value={txt} onChange={e => setTxt(e.target.value)} /></div>
+      {codigos.length > 0 && <p className="meta">{codigos.length} códigos leídos: <b>{hallados.length}</b> existen en el panel ({aMarcar.length} se marcarán ahora, el resto ya estaba marcado) y <b>{noHallados.length}</b> no existen{noHallados.length > 0 ? `: ${noHallados.slice(0, 8).join(", ")}${noHallados.length > 8 ? "…" : ""}` : ""}.</p>}
+      <label className="opt" style={{ minHeight: 44 }}><input type="checkbox" checked={reemplazar} onChange={e => setReemplazar(e.target.checked)} /><span>Quitar la marca a los que no estén en esta lista{reemplazar && aQuitar.length > 0 ? ` (se desmarcarán ${aQuitar.length})` : ""}</span></label>
+      {segErr(err)}
+      <div className="actions"><button type="button" className="btn main" disabled={busy || (aMarcar.length === 0 && aQuitar.length === 0)} onClick={aplicar}>{busy ? "Guardando…" : "Aplicar"}</button><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>
+    </Hoja>
+  );
+}
+
 function SeguimientoInner() {
   const envUrl = import.meta.env.VITE_SUPABASE_URL;
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -2138,6 +2499,7 @@ function SeguimientoInner() {
   const [com, setCom] = useState("");
   const [lim, setLim] = useState(25);
   const [hoja, setHoja] = useState(null);
+  const [soloCD, setSoloCD] = useState(false);
   const [toast, setToast] = useState(null); // { msg, undo }
   const toastTimer = React.useRef(null);
 
@@ -2146,8 +2508,9 @@ function SeguimientoInner() {
     let vivo = true;
     (async () => {
       try {
-        const [reg, pr, an] = await Promise.all([fetcher.fetchTable("regiones"), fetcher.fetchTable("seg_proyectos", "id"), fetcher.fetchTable("seg_anotaciones", "id")]);
-        if (vivo) { setDatos({ reg, pr, an }); setError(null); }
+        const opc = (t) => fetcher.fetchTable(t, "id").catch(() => []); // tablas de detalle: si aún no existen, el resto funciona igual
+        const [reg, pr, an, lic, con, ep] = await Promise.all([fetcher.fetchTable("regiones"), fetcher.fetchTable("seg_proyectos", "id"), fetcher.fetchTable("seg_anotaciones", "id"), opc("seg_licitaciones"), opc("seg_contratos"), opc("seg_estados_pago")]);
+        if (vivo) { setDatos({ reg, pr, an, lic, con, ep }); setError(null); }
       } catch (e) { if (vivo) setError(segMsgError(e)); }
     })();
     return () => { vivo = false; };
@@ -2167,13 +2530,18 @@ function SeguimientoInner() {
     if (!datos) return [];
     const por = {};
     for (const a of datos.an) (por[a.proyecto_id] = por[a.proyecto_id] || []).push(a);
+    const grupo = (arr) => { const m = {}; for (const r of arr || []) if (!r.anulada) (m[r.proyecto_id] = m[r.proyecto_id] || []).push(r); return m; };
+    const gLic = grupo(datos.lic), gCon = grupo(datos.con), gEp = grupo(datos.ep);
     return datos.pr.map(p => {
+      const lic = (gLic[p.id] || []).slice().sort((a, b) => a.numero - b.numero || a.id - b.id);
+      const con = (gCon[p.id] || []).slice().sort((a, b) => String(a.creado_en).localeCompare(String(b.creado_en)) || a.id - b.id);
+      const ep = gEp[p.id] || [];
       const hist = (por[p.id] || []).slice().sort((x, y) => String(x.creado_en).localeCompare(String(y.creado_en)) || x.id - y.id);
       let cur = null;
       for (const a of hist) if ((a.tipo || "avance") === "avance" && !a.anulada) cur = a;
       const est = !cur ? "sin" : (segDias(cur.fecha) > SEG_DIAS_DESACTUALIZADO ? "vie" : "ok");
       const retiro = p.activo === false ? hist.filter(a => a.tipo === "retiro" && !a.anulada).pop() || null : null;
-      return { p, hist, cur, est, retiro, activo: p.activo !== false };
+      return { p, hist, cur, est, retiro, activo: p.activo !== false, lic, con, ep, det: segResumenDetalle(p, lic, con, ep) };
     });
   }, [datos]);
 
@@ -2203,6 +2571,39 @@ function SeguimientoInner() {
     addAn(fila);
     return fila;
   }
+  const addDet = (key, row) => setDatos(d => ({ ...d, [key]: [...(d[key] || []), row] }));
+  const patchDet = (key, id, patch) => setDatos(d => ({ ...d, [key]: (d[key] || []).map(r => (r.id === id ? { ...r, ...patch } : r)) }));
+  const patchPrVarios = (ids, valor) => setDatos(d => { const set = new Set(ids); return { ...d, pr: d.pr.map(p => (set.has(p.id) ? { ...p, chile_despega: valor } : p)) }; });
+  async function guardarDet(key, tabla, id, payload, it) {
+    const marca = { modificado_por: autor, modificado_en: new Date().toISOString() };
+    if (id) {
+      const [fila] = await fetcher.updateRow(tabla, id, { ...payload, ...marca });
+      if (!fila) throw new Error("No se pudo guardar el cambio (sin permiso en la base de datos).");
+      patchDet(key, id, fila);
+    } else {
+      const [fila] = await fetcher.insertRow(tabla, { proyecto_id: it.p.id, autor, ...payload });
+      if (!fila) throw new Error("No se pudo guardar (sin permiso en la base de datos).");
+      addDet(key, fila);
+    }
+  }
+  async function quitarDet(key, tabla, id) {
+    const [fila] = await fetcher.updateRow(tabla, id, { anulada: true, modificado_por: autor, modificado_en: new Date().toISOString() });
+    if (!fila) throw new Error("sin permiso en la base de datos");
+    patchDet(key, id, { anulada: true });
+  }
+  async function guardarAdj(it, patch) {
+    const [fila] = await fetcher.updateRow("seg_proyectos", it.p.id, patch);
+    if (!fila) throw new Error("No se pudo guardar (sin permiso en la base de datos).");
+    patchPr(it.p.id, patch);
+  }
+  async function marcarCD(it) {
+    try {
+      const valor = !it.p.chile_despega;
+      const [fila] = await fetcher.updateRow("seg_proyectos", it.p.id, { chile_despega: valor });
+      if (!fila) throw new Error("sin permiso en la base de datos");
+      patchPr(it.p.id, { chile_despega: valor });
+    } catch (e) { mostrarToast("No se pudo cambiar la marca: " + segMsgError(e)); }
+  }
   async function avanzar(it) {
     const i = it.cur ? SEG_ETAPA_IDX[it.cur.etapa] : -1;
     if (i < 0 || i >= SEG_ETAPAS.length - 1) return;
@@ -2222,7 +2623,8 @@ function SeguimientoInner() {
   }
 
   // ---------- Pantallas ----------
-  const activos = items.filter(x => x.activo);
+  const nCD = items.filter(x => x.activo && x.p.chile_despega).length;
+  const activos = items.filter(x => x.activo && (!soloCD || x.p.chile_despega));
   const retirados = items.filter(x => !x.activo);
 
   const Puerta = () => (
@@ -2240,6 +2642,13 @@ function SeguimientoInner() {
     </>
   );
 
+  const SelectorCD = () => (
+    <div className="chips" role="group" aria-label="Qué proyectos mostrar">
+      <button type="button" className="chip" aria-pressed={!soloCD} onClick={() => { setSoloCD(false); setLim(25); }}>Todos los proyectos</button>
+      <button type="button" className="chip" aria-pressed={soloCD} onClick={() => { setSoloCD(true); setLim(25); }}>Solo Chile Despega ({nCD})</button>
+    </div>
+  );
+
   const Resumen = () => {
     const por = {};
     SEG_ORDEN.forEach(id => { por[id] = { t: 0, sin: 0, vie: 0, ok: 0, et: {} }; });
@@ -2248,8 +2657,10 @@ function SeguimientoInner() {
     SEG_ORDEN.forEach(id => ["t", "sin", "vie", "ok"].forEach(k => { T[k] += por[id][k]; }));
     return (
       <>
+        {SelectorCD()}
+        {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
         <div className="kpis">
-          <div className="kpi"><b>{T.t}</b><span>proyectos en seguimiento</span></div>
+          <div className="kpi"><b>{T.t}</b><span>proyectos en seguimiento{soloCD ? " (Chile Despega)" : ""}</span></div>
           <div className="kpi"><b>{T.ok}</b><span>al día (actualizados en los últimos {SEG_DIAS_DESACTUALIZADO} días)</span></div>
           <div className="kpi"><b>{T.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días sin anotar)</span></div>
           <div className="kpi"><b>{T.sin}</b><span>sin actualizar (nunca anotados)</span></div>
@@ -2257,6 +2668,7 @@ function SeguimientoInner() {
         <div className="actions" style={{ marginBottom: 18 }}>
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>Agregar un proyecto a mano</button>
+          <button type="button" className="btn" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>
           {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Ver retirados ({retirados.length})</button>}
         </div>
         <h2>Avance de actualización por región</h2>
@@ -2269,9 +2681,9 @@ function SeguimientoInner() {
               <b>{pc}%</b>
             </div>); })}
         </div>
-        <h2>Proyectos por etapa de seguimiento</h2>
+        <h2>Proyectos por etapa de seguimiento{soloCD ? " (Chile Despega)" : ""}</h2>
         <div className="tw"><table>
-          <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{SEG_ETAPAS.map((e, i) => <th key={e.id} title={e.n}>Etapa {i + 1}</th>)}</tr></thead>
+          <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
           <tbody>
             {SEG_ORDEN.map(id => { const b = por[id]; return (
               <tr key={id} data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>
@@ -2280,7 +2692,6 @@ function SeguimientoInner() {
             <tr><td><b>Total</b></td><td><b>{T.t}</b></td><td><b>{T.sin}</b></td>{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (por[id].et[e.id] || 0), 0)}</b></td>)}</tr>
           </tbody>
         </table></div>
-        <p className="meta">Etapas: {SEG_ETAPAS.map((e, i) => `${i + 1} = ${e.n}`).join(" · ")}</p>
       </>
     );
   };
@@ -2301,12 +2712,15 @@ function SeguimientoInner() {
       <article key={p.id} className={"card " + est}>
         <h3>{p.nombre}</h3>
         <div className="meta">{p.comuna} · {p.programa}{SEG_LINEA[p.programa] && <> <span className="tag">{SEG_LINEA[p.programa]}</span></>} · {segClp(p.monto_subdere)} · {p.codigo ? "Código " + p.codigo : <span className="pill sin">Sin código, completar por URS</span>}</div>
-        <div className="row"><span className="meta">En qué está:</span><span className={"pill " + est}>{cur ? SEG_ETAPAS[SEG_ETAPA_IDX[cur.etapa]].n : "Sin actualizar"}</span></div>
+        <div className="row"><span className="meta">En qué está:</span><span className={"pill " + est}>{cur ? SEG_ETAPAS[SEG_ETAPA_IDX[cur.etapa]].n : "Sin actualizar"}</span>{p.chile_despega && <span className="tag">Chile Despega</span>}</div>
+        {it.det.length > 0 && <div className="resumen-det">{it.det.map((t, k) => <div key={k} className="meta">{t}</div>)}</div>}
         {cur && <div className="meta">Última anotación: {fmtFecha(cur.fecha)} (hace {segDias(cur.fecha)} días){cur.autor ? ` · por ${cur.autor}` : ""}{cur.nota ? `. Nota: ${cur.nota}` : ""}</div>}
         <div className="actions">
           {sig && <button type="button" className="btn go" onClick={() => avanzar(it)}>Pasar a: {sig.n}</button>}
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "actualizar", id: p.id })}>Actualizar Estado del Proyecto</button>
+          <button type="button" className="btn" onClick={() => setHoja({ tipo: "detalle", id: p.id })}>Detalle: licitación, contrato y obras</button>
           {!p.codigo && <button type="button" className="btn" onClick={() => setHoja({ tipo: "actualizar", id: p.id, foco: true })}>Ingresar código</button>}
+          {esGab && <button type="button" className="btn sm" onClick={() => marcarCD(it)}>{p.chile_despega ? "Quitar de Chile Despega" : "Marcar Chile Despega"}</button>}
           {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "retiro", id: p.id })}>Retirar del seguimiento</button>}
         </div>
       </article>
@@ -2316,7 +2730,7 @@ function SeguimientoInner() {
   const Lista = () => {
     const base = region === "__ret" ? retirados : (flt === "ret" ? retirados.filter(x => x.p.region_id === region) : activos.filter(x => x.p.region_id === region));
     const todas = (region === "__ret" ? retirados : items.filter(x => x.p.region_id === region));
-    const act = todas.filter(x => x.activo);
+    const act = todas.filter(x => x.activo && (!soloCD || x.p.chile_despega));
     const cnt = { sin: 0, vie: 0, ok: 0 };
     act.forEach(x => { cnt[x.est]++; });
     const comunas = [...new Set(todas.map(x => x.p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
@@ -2330,7 +2744,8 @@ function SeguimientoInner() {
     return (
       <>
         {esGab && <p><button type="button" className="btn" onClick={() => { setDrill(null); setFlt("all"); window.scrollTo(0, 0); }}>← Volver al resumen</button></p>}
-        <h2>{titulo}</h2>
+        <h2>{titulo}{soloCD && region !== "__ret" ? " · solo Chile Despega" : ""}</h2>
+        {region !== "__ret" && SelectorCD()}
         {region !== "__ret" && <div className="kpis">
           <div className="kpi"><b>{act.length}</b><span>proyectos en seguimiento</span></div>
           <div className="kpi"><b>{cnt.sin}</b><span>sin actualizar</span></div>
@@ -2362,7 +2777,7 @@ function SeguimientoInner() {
     );
   };
 
-  const ctx = { datos, esGab, as, autor, fetcher, labelReg, recargar, setHoja, mostrarToast, nuevaAnotacion, patchAn, patchPr };
+  const ctx = { datos, esGab, as, autor, fetcher, labelReg, recargar, setHoja, mostrarToast, nuevaAnotacion, patchAn, patchPr, guardarDet, quitarDet, guardarAdj, patchPrVarios };
   const hojaItem = hoja && hoja.id != null ? items.find(x => x.p.id === hoja.id) : null;
 
   return (
@@ -2386,6 +2801,8 @@ function SeguimientoInner() {
       {hoja && hoja.tipo === "historial" && hojaItem && <HojaHistorial ctx={ctx} it={hojaItem} />}
       {hoja && hoja.tipo === "agregar" && <HojaAgregar ctx={ctx} regionInicial={hoja.region} />}
       {hoja && hoja.tipo === "carga" && <HojaCarga ctx={ctx} />}
+      {hoja && hoja.tipo === "detalle" && hojaItem && <HojaDetalle ctx={ctx} it={hojaItem} />}
+      {hoja && hoja.tipo === "cd" && <HojaCD ctx={ctx} />}
       {toast && (
         <div className="toast"><span>{toast.msg}</span>
           {toast.undo && <button type="button" onClick={() => { const u = toast.undo; setToast(null); u(); }}>Deshacer</button>}</div>

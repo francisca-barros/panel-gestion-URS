@@ -1773,7 +1773,7 @@ function segRegionId(v) {
   return null;
 }
 // Analiza la matriz leída. regionPermitida: id de región (jefe URS) o null (gabinete: todas)
-function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor }) {
+function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigosCD = new Set() }) {
   let hi = -1, col = {};
   for (let i = 0; i < Math.min(matriz.length, 40) && hi < 0; i++) {
     const celdas = matriz[i].map(segNorm);
@@ -1785,14 +1785,16 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor }) {
   }
   if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
   const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
-  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, sinEstado: col.estado == null };
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, cdNuevos: 0, cdGirado: 0, sinEstado: col.estado == null };
   const recs = [], rechazos = [], vistos = new Set();
   for (let i = hi + 1; i < matriz.length; i++) {
     const r = matriz[i];
     if (!r || r.every(x => String(x == null ? "" : x).trim() === "")) continue;
     st.leidas++;
     const fila = i + 1, codigo = get("codigo", r), nombre = get("nombre", r);
-    if (col.estado != null && !SEG_ESTADOS_ALCANCE.includes(segNorm(get("estado", r)))) { st.fueraAlcance++; continue; }
+    // Excepción: los proyectos de la lista Chile Despega entran también si están en «100% Girado»
+    const enCD = codigosCD.has(codigo), estNorm = segNorm(get("estado", r));
+    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || (enCD && estNorm === "100% girado"))) { st.fueraAlcance++; continue; }
     const rid = segRegionId(get("region", r));
     const rech = (motivo) => rechazos.push({ fila, codigo, nombre, motivo });
     if (!rid) { rech("región no reconocida"); continue; }
@@ -1803,9 +1805,10 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor }) {
     const comuna = segTitulo(get("comuna", r)), programa = get("programa", r);
     if (!comuna || !nombre || !programa) { rech("faltan datos (comuna, programa o nombre)"); continue; }
     vistos.add(codigo);
+    if (enCD) { st.cdNuevos++; if (estNorm === "100% girado") st.cdGirado++; }
     const monto = parseInt(get("monto", r).replace(/[^\d]/g, ""), 10);
     const anio = parseInt(get("anio", r), 10);
-    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, origen: "excel", creado_por: autor });
+    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, origen: "excel", creado_por: autor });
   }
   return { stats: st, recs, rechazos };
 }
@@ -2073,13 +2076,17 @@ function HojaCarga({ ctx }) {
     const [res, setRes] = useState(null);
     const [err, setErr] = useState("");
     const [nGuardados, setNGuardados] = useState(0);
+    const [cdTxt, setCdTxt] = useState("");
     async function leer(file) {
       if (!file) return;
       setFase("leyendo"); setErr("");
       try {
         const matriz = await segLeerMatriz(file);
-        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), autor });
+        const codigosCD = new Set(esGab ? cdTxt.split(/[\n\r\t;]+/).map(x => x.trim()).filter(Boolean) : []);
+        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), autor, codigosCD });
         if (r.error) { setErr(r.error); setFase("elegir"); return; }
+        r.marcar = datos.pr.filter(p => p.codigo && codigosCD.has(p.codigo) && !p.chile_despega).map(p => p.id); // ya cargados que se marcarán Chile Despega
+        r.nCD = codigosCD.size;
         setRes(r); setFase("resumen");
       } catch (e) { setErr("No pude leer el archivo: " + (e.message || e) + ". Guárdalo como .xlsx o .csv y vuelve a intentar."); setFase("elegir"); }
     }
@@ -2092,6 +2099,7 @@ function HojaCarga({ ctx }) {
           await fetcher.insertMany("seg_proyectos", res.recs.slice(i, i + LOTE));
           n += Math.min(LOTE, res.recs.length - i); setNGuardados(n);
         }
+        for (let i = 0; i < (res.marcar || []).length; i += 150) await fetcher.updateWhere("seg_proyectos", `id=in.(${res.marcar.slice(i, i + 150).join(",")})`, { chile_despega: true });
         recargar(); setFase("listo");
       } catch (e) { setErr(`Se guardaron ${nGuardados} proyectos y luego falló: ${segMsgError(e)}. Vuelve a cargar el mismo archivo: los ya guardados se omiten.`); recargar(); setFase("resumen"); }
     }
@@ -2101,6 +2109,9 @@ function HojaCarga({ ctx }) {
         <h2>Cargar proyectos desde Excel</h2>
         {fase === "elegir" && <>
           <p className="meta">Sirve el listado de SUBDERE en línea (.xls), un .xlsx o un .csv. {esGab ? "Se aceptan todas las regiones." : `Solo se aceptan proyectos de la región de ${labelReg(as)}.`} Solo entran proyectos desde Aprobado en adelante; los códigos que ya existen se omiten.</p>
+          {esGab && <div className="fld"><label htmlFor="seg-cdl">Lista Chile Despega (opcional)</label>
+            <textarea id="seg-cdl" style={{ minHeight: 90 }} value={cdTxt} onChange={e => setCdTxt(e.target.value)} placeholder="Pega aquí los códigos Chile Despega, uno por línea" />
+            <p className="meta">Los proyectos de esta lista entran aunque estén en «100% Girado», quedan marcados como Chile Despega y los que ya estaban cargados también se marcan. Pega la lista ANTES de elegir el archivo.</p></div>}
           <div className="fld"><label htmlFor="seg-file">Archivo</label><input type="file" id="seg-file" accept=".xls,.xlsx,.csv,.txt" onChange={e => leer(e.target.files[0])} /></div>
         </>}
         {fase === "leyendo" && <p>Leyendo el archivo… puede tardar unos segundos.</p>}
@@ -2110,6 +2121,7 @@ function HojaCarga({ ctx }) {
             <div className="kpi"><b>{st.yaExistian}</b><span>ya estaban en el panel (se omiten)</span></div>
             <div className="kpi"><b>{res.rechazos.length}</b><span>rechazados</span></div>
           </div>
+          {res.nCD > 0 && <p className="meta"><b>Chile Despega:</b> la lista trae {res.nCD} códigos. Entran {st.cdNuevos} nuevos (de ellos {st.cdGirado} en «100% Girado») y se marcan {res.marcar.length} que ya estaban cargados.</p>}
           <p className="meta">Filas leídas: {st.leidas}. Fuera de alcance (estado distinto de Aprobado, Con Anticipo Solicitado, Con Giro por Anticipo, En Ejecución o En Proceso de Cierre): {st.fueraAlcance}.{!esGab && ` De otra región (se ignoran): ${st.otraRegion}.`}{st.sinEstado && " ATENCIÓN: el archivo no trae columna «Estado», no se pudo filtrar por alcance."}</p>
           {res.rechazos.length > 0 && <>
             <p className="meta"><b>Rechazados</b> (no se guardan):</p>
@@ -2120,12 +2132,12 @@ function HojaCarga({ ctx }) {
           </>}
           {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
           <div className="actions" style={{ marginTop: 12 }}>
-            {res.recs.length > 0 && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : `Guardar ${res.recs.length} proyectos`}</button>}
+            {(res.recs.length > 0 || res.marcar.length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : (res.recs.length > 0 ? `Guardar ${res.recs.length} proyectos` : `Marcar ${res.marcar.length} como Chile Despega`)}</button>}
             <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
           </div>
         </>}
         {fase === "listo" && <>
-          <p><b>Listo: se guardaron {nGuardados} proyectos.</b></p>
+          <p><b>{res && res.recs.length === 0 ? `Listo: se marcaron ${res.marcar.length} proyectos como Chile Despega.` : `Listo: se guardaron ${nGuardados} proyectos.`}</b></p>
           <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
         </>}
         {err && fase === "elegir" && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
@@ -2500,6 +2512,7 @@ function SeguimientoInner() {
   const [lim, setLim] = useState(25);
   const [hoja, setHoja] = useState(null);
   const [soloCD, setSoloCD] = useState(false);
+  const [cdRegion, setCdRegion] = useState(null); // región abierta dentro de «Proyectos por etapa»
   const [toast, setToast] = useState(null); // { msg, undo }
   const toastTimer = React.useRef(null);
 
@@ -2624,7 +2637,7 @@ function SeguimientoInner() {
 
   // ---------- Pantallas ----------
   const nCD = items.filter(x => x.activo && x.p.chile_despega).length;
-  const activos = items.filter(x => x.activo && (!soloCD || x.p.chile_despega));
+  const activos = items.filter(x => x.activo);
   const retirados = items.filter(x => !x.activo);
 
   const Puerta = () => (
@@ -2642,25 +2655,22 @@ function SeguimientoInner() {
     </>
   );
 
-  const SelectorCD = () => (
-    <div className="chips" role="group" aria-label="Qué proyectos mostrar">
-      <button type="button" className="chip" aria-pressed={!soloCD} onClick={() => { setSoloCD(false); setLim(25); }}>Todos los proyectos</button>
-      <button type="button" className="chip" aria-pressed={soloCD} onClick={() => { setSoloCD(true); setLim(25); }}>Solo Chile Despega ({nCD})</button>
-    </div>
-  );
-
   const Resumen = () => {
     const por = {};
     SEG_ORDEN.forEach(id => { por[id] = { t: 0, sin: 0, vie: 0, ok: 0, et: {} }; });
     for (const x of activos) { const b = por[x.p.region_id]; if (!b) continue; b.t++; b[x.est]++; if (x.cur) b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; }
     const T = { t: 0, sin: 0, vie: 0, ok: 0 };
     SEG_ORDEN.forEach(id => ["t", "sin", "vie", "ok"].forEach(k => { T[k] += por[id][k]; }));
+    // La tabla «por etapa» puede filtrarse a Chile Despega; los números de arriba no
+    const porT = {};
+    SEG_ORDEN.forEach(id => { porT[id] = { t: 0, sin: 0, et: {} }; });
+    for (const x of activos) { if (soloCD && !x.p.chile_despega) continue; const b = porT[x.p.region_id]; if (!b) continue; b.t++; if (x.est === "sin") b.sin++; if (x.cur) b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; }
+    const TT = { t: 0, sin: 0 };
+    SEG_ORDEN.forEach(id => { TT.t += porT[id].t; TT.sin += porT[id].sin; });
     return (
       <>
-        {SelectorCD()}
-        {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
         <div className="kpis">
-          <div className="kpi"><b>{T.t}</b><span>proyectos en seguimiento{soloCD ? " (Chile Despega)" : ""}</span></div>
+          <div className="kpi"><b>{T.t}</b><span>proyectos en seguimiento</span></div>
           <div className="kpi"><b>{T.ok}</b><span>al día (actualizados en los últimos {SEG_DIAS_DESACTUALIZADO} días)</span></div>
           <div className="kpi"><b>{T.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días sin anotar)</span></div>
           <div className="kpi"><b>{T.sin}</b><span>sin actualizar (nunca anotados)</span></div>
@@ -2668,7 +2678,6 @@ function SeguimientoInner() {
         <div className="actions" style={{ marginBottom: 18 }}>
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>Agregar un proyecto a mano</button>
-          <button type="button" className="btn" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>
           {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Ver retirados ({retirados.length})</button>}
         </div>
         <h2>Avance de actualización por región</h2>
@@ -2681,17 +2690,41 @@ function SeguimientoInner() {
               <b>{pc}%</b>
             </div>); })}
         </div>
-        <h2>Proyectos por etapa de seguimiento{soloCD ? " (Chile Despega)" : ""}</h2>
+        <h2>Proyectos por etapa de seguimiento{soloCD ? " · solo Chile Despega" : ""}</h2>
+        <div className="chips" role="group" aria-label="Proyectos por etapa">
+          <button type="button" className="chip" aria-pressed={!soloCD} onClick={() => { setSoloCD(false); setCdRegion(null); }}>Todos los proyectos</button>
+          <button type="button" className="chip" aria-pressed={soloCD} onClick={() => { setSoloCD(true); setCdRegion(null); }}>Proyectos Chile Despega ({nCD})</button>
+          {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>}
+        </div>
+        {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
+        {soloCD && nCD > 0 && <p className="meta">Toca una región de la tabla para ver aquí sus proyectos Chile Despega.</p>}
         <div className="tw"><table>
           <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
           <tbody>
-            {SEG_ORDEN.map(id => { const b = por[id]; return (
-              <tr key={id} data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>
+            {SEG_ORDEN.map(id => { const b = porT[id]; return (
+              <tr key={id} data-drill="1" aria-selected={soloCD && cdRegion === id} style={soloCD && cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
+                onClick={() => { if (soloCD) { setCdRegion(cdRegion === id ? null : id); setLim(25); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); } else { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); } }}>
                 <td><button type="button">{labelReg(id)}</button></td><td>{b.t}</td><td>{b.sin}</td>{SEG_ETAPAS.map(e => <td key={e.id}>{b.et[e.id] || 0}</td>)}
               </tr>); })}
-            <tr><td><b>Total</b></td><td><b>{T.t}</b></td><td><b>{T.sin}</b></td>{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (por[id].et[e.id] || 0), 0)}</b></td>)}</tr>
+            <tr><td><b>Total</b></td><td><b>{TT.t}</b></td><td><b>{TT.sin}</b></td>{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (porT[id].et[e.id] || 0), 0)}</b></td>)}</tr>
           </tbody>
         </table></div>
+        {soloCD && cdRegion && (() => {
+          const lista = activos.filter(x => x.p.region_id === cdRegion && x.p.chile_despega);
+          return (
+            <div id="seg-cd-lista" style={{ marginTop: 16 }}>
+              <h2>Chile Despega · Región de {labelReg(cdRegion)} ({lista.length})</h2>
+              <div className="list">
+                {lista.length === 0 ? <div className="empty">Esta región no tiene proyectos Chile Despega.</div> : lista.slice(0, lim).map(it => Tarjeta({ it }))}
+                {lista.length > lim && <div className="more"><button type="button" className="btn" onClick={() => setLim(l => l + 25)}>Ver {Math.min(25, lista.length - lim)} más (faltan {lista.length - lim})</button></div>}
+              </div>
+              <div className="actions" style={{ marginTop: 10 }}>
+                <button type="button" className="btn" onClick={() => setCdRegion(null)}>Cerrar lista</button>
+                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>Ver todos los proyectos de la región</button>
+              </div>
+            </div>
+          );
+        })()}
       </>
     );
   };
@@ -2730,7 +2763,7 @@ function SeguimientoInner() {
   const Lista = () => {
     const base = region === "__ret" ? retirados : (flt === "ret" ? retirados.filter(x => x.p.region_id === region) : activos.filter(x => x.p.region_id === region));
     const todas = (region === "__ret" ? retirados : items.filter(x => x.p.region_id === region));
-    const act = todas.filter(x => x.activo && (!soloCD || x.p.chile_despega));
+    const act = todas.filter(x => x.activo);
     const cnt = { sin: 0, vie: 0, ok: 0 };
     act.forEach(x => { cnt[x.est]++; });
     const comunas = [...new Set(todas.map(x => x.p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
@@ -2744,8 +2777,7 @@ function SeguimientoInner() {
     return (
       <>
         {esGab && <p><button type="button" className="btn" onClick={() => { setDrill(null); setFlt("all"); window.scrollTo(0, 0); }}>← Volver al resumen</button></p>}
-        <h2>{titulo}{soloCD && region !== "__ret" ? " · solo Chile Despega" : ""}</h2>
-        {region !== "__ret" && SelectorCD()}
+        <h2>{titulo}</h2>
         {region !== "__ret" && <div className="kpis">
           <div className="kpi"><b>{act.length}</b><span>proyectos en seguimiento</span></div>
           <div className="kpi"><b>{cnt.sin}</b><span>sin actualizar</span></div>

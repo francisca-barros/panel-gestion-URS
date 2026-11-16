@@ -2784,8 +2784,8 @@ function SeguimientoInner() {
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "actualizar", id: p.id })}>Actualizar Estado del Proyecto</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "detalle", id: p.id })}>Detalle: licitación, contrato y obras</button>
           {!p.codigo && <button type="button" className="btn" onClick={() => setHoja({ tipo: "actualizar", id: p.id, foco: true })}>Ingresar código</button>}
-          {esGab && <button type="button" className="btn sm" onClick={() => marcarCD(it)}>{p.chile_despega ? "Quitar de Chile Despega" : "Marcar Chile Despega"}</button>}
-          {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "retiro", id: p.id })}>Retirar del seguimiento</button>}
+          {<button type="button" className="btn sm" onClick={() => marcarCD(it)}>{p.chile_despega ? "Quitar de Chile Despega" : "Marcar Chile Despega"}</button>}
+          {<button type="button" className="btn sm" onClick={() => setHoja({ tipo: "retiro", id: p.id })}>Retirar del seguimiento</button>}
         </div>
       </article>
     );
@@ -2803,7 +2803,7 @@ function SeguimientoInner() {
       (flt === "all" || flt === "ret" || (flt === "nocode" ? !x.p.codigo : x.est === flt)) &&
       (!ql || `${x.p.nombre} ${x.p.comuna} ${x.p.codigo || ""}`.toLowerCase().includes(ql)));
     const chips = [["all", "Todos"], ["sin", "Sin actualizar"], ["vie", "Desactualizados"], ["ok", "Al día"], ["nocode", "Sin código"]];
-    if (esGab) chips.push(["ret", `Retirados (${todas.filter(x => !x.activo).length})`]);
+    chips.push(["ret", `Retirados (${todas.filter(x => !x.activo).length})`]);
     const titulo = region === "__ret" ? "Proyectos retirados del seguimiento" : `Región de ${labelReg(region)}`;
     return (
       <>

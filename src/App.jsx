@@ -1763,6 +1763,7 @@ const SEG_ALIAS = {
   monto: ["aporte subdere ($)", "aporte subdere", "monto subdere", "monto"],
   estado: ["estado", "estado subdere"],
   anio: ["ano creacion", "anio creacion"],
+  clasif: ["clasif. especial", "clasif especial", "clasificacion especial"],
 };
 function segRegionId(v) {
   const s = segNorm(v);
@@ -1785,7 +1786,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
   }
   if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
   const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
-  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, cdNuevos: 0, cdGirado: 0, sinEstado: col.estado == null };
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, sinEstado: col.estado == null };
   const recs = [], rechazos = [], vistos = new Set();
   for (let i = hi + 1; i < matriz.length; i++) {
     const r = matriz[i];
@@ -1793,8 +1794,9 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     st.leidas++;
     const fila = i + 1, codigo = get("codigo", r), nombre = get("nombre", r);
     // Excepción: los proyectos de la lista Chile Despega entran también si están en «100% Girado»
-    const enCD = codigosCD.has(codigo), estNorm = segNorm(get("estado", r));
-    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || (enCD && estNorm === "100% girado"))) { st.fueraAlcance++; continue; }
+    // Excepción 2: los proyectos de CATÁSTROFE (la palabra está en el nombre o en «Clasif. Especial») entran también si están en «100% Girado»
+    const enCD = codigosCD.has(codigo), estNorm = segNorm(get("estado", r)), esCat = estNorm === "100% girado" && (segNorm(nombre).includes("catastrofe") || (col.clasif != null && segNorm(get("clasif", r)).includes("catastrofe")));
+    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || (enCD && estNorm === "100% girado") || esCat)) { st.fueraAlcance++; continue; }
     const rid = segRegionId(get("region", r));
     const rech = (motivo) => rechazos.push({ fila, codigo, nombre, motivo });
     if (!rid) { rech("región no reconocida"); continue; }
@@ -1806,6 +1808,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     if (!comuna || !nombre || !programa) { rech("faltan datos (comuna, programa o nombre)"); continue; }
     vistos.add(codigo);
     if (enCD) { st.cdNuevos++; if (estNorm === "100% girado") st.cdGirado++; }
+    if (esCat && !enCD) st.catGirado++;
     const monto = parseInt(get("monto", r).replace(/[^\d]/g, ""), 10);
     const anio = parseInt(get("anio", r), 10);
     recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, origen: "excel", creado_por: autor });
@@ -2130,6 +2133,7 @@ function HojaCarga({ ctx }) {
             <div className="kpi"><b>{res.rechazos.length}</b><span>rechazados</span></div>
           </div>
           {res.nCD > 0 && <p className="meta"><b>Chile Despega:</b> la lista trae {res.nCD} códigos. Entran {st.cdNuevos} nuevos (de ellos {st.cdGirado} en «100% Girado») y se marcan {res.marcar.length} que ya estaban cargados.</p>}
+          {st.catGirado > 0 && <p className="meta"><b>Catástrofe:</b> entran {st.catGirado} proyectos nuevos de catástrofe que están en «100% Girado» (se incluyen aunque ese estado normalmente queda fuera).</p>}
           <p className="meta">Filas leídas: {st.leidas}. Fuera de alcance (estado distinto de Aprobado, Con Anticipo Solicitado, Con Giro por Anticipo, En Ejecución o En Proceso de Cierre): {st.fueraAlcance}.{!esGab && ` De otra región (se ignoran): ${st.otraRegion}.`}{st.sinEstado && " ATENCIÓN: el archivo no trae columna «Estado», no se pudo filtrar por alcance."}</p>
           {res.rechazos.length > 0 && <>
             <p className="meta"><b>Rechazados</b> (no se guardan):</p>

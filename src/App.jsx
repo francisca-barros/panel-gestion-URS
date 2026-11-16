@@ -1696,6 +1696,7 @@ const SEG_REG_ID = { 1: "tarapaca", 2: "antofagasta", 3: "atacama", 4: "coquimbo
 const SEG_ORDEN = [15, 1, 2, 3, 4, 5, 13, 6, 7, 16, 8, 9, 14, 10, 11, 12].map(c => SEG_REG_ID[c]);
 const SEG_LABEL_FALLBACK = Object.fromEntries(Object.keys(SEG_REG).map(c => [SEG_REG_ID[c], SEG_REG[c]]));
 const SEG_ETAPAS = [
+  { id: "bases", n: "En preparación de bases", s: "Se están elaborando las bases de la licitación, antes de publicarla" },
   { id: "licitacion", n: "En licitación", s: "Incluye administración directa decretada. El detalle de la licitación (publicación, ofertas, evaluación) está por confirmar: usa la nota." },
   { id: "adjudicado", n: "Adjudicado", s: "Adjudicación aprobada por decreto" },
   { id: "contratado", n: "Contratado", s: "Garantías pedidas y contrato firmado" },
@@ -1763,6 +1764,7 @@ const SEG_ALIAS = {
   monto: ["aporte subdere ($)", "aporte subdere", "monto subdere", "monto"],
   estado: ["estado", "estado subdere"],
   anio: ["ano creacion", "anio creacion"],
+  faprob: ["fecha aprobacion", "fecha de aprobacion"],
   clasif: ["clasif. especial", "clasif especial", "clasificacion especial"],
 };
 function segRegionId(v) {
@@ -1786,7 +1788,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
   }
   if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
   const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
-  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, sinEstado: col.estado == null };
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
   const recs = [], rechazos = [], vistos = new Set();
   for (let i = hi + 1; i < matriz.length; i++) {
     const r = matriz[i];
@@ -1796,7 +1798,9 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     // Excepción: los proyectos de la lista Chile Despega entran también si están en «100% Girado»
     // Excepción 2: los proyectos de CATÁSTROFE (la palabra está en el nombre o en «Clasif. Especial») entran también si están en «100% Girado»
     const enCD = codigosCD.has(codigo), estNorm = segNorm(get("estado", r)), esCat = estNorm === "100% girado" && (segNorm(nombre).includes("catastrofe") || (col.clasif != null && segNorm(get("clasif", r)).includes("catastrofe")));
-    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || (enCD && estNorm === "100% girado") || esCat)) { st.fueraAlcance++; continue; }
+    // Excepción 3: los «100% Girado» aprobados en 2026 (columna Fecha Aprobación) entran también
+    const esG26 = estNorm === "100% girado" && col.faprob != null && /(^|\/|-)2026(\D|$)/.test(get("faprob", r).slice(-10)) ;
+    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || (enCD && estNorm === "100% girado") || esCat || esG26)) { st.fueraAlcance++; continue; }
     const rid = segRegionId(get("region", r));
     const rech = (motivo) => rechazos.push({ fila, codigo, nombre, motivo });
     if (!rid) { rech("región no reconocida"); continue; }
@@ -1809,6 +1813,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     vistos.add(codigo);
     if (enCD) { st.cdNuevos++; if (estNorm === "100% girado") st.cdGirado++; }
     if (esCat && !enCD) st.catGirado++;
+    else if (esG26 && !enCD) st.g26++;
     const monto = parseInt(get("monto", r).replace(/[^\d]/g, ""), 10);
     const anio = parseInt(get("anio", r), 10);
     recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, origen: "excel", creado_por: autor });
@@ -2134,6 +2139,7 @@ function HojaCarga({ ctx }) {
           </div>
           {res.nCD > 0 && <p className="meta"><b>Chile Despega:</b> la lista trae {res.nCD} códigos. Entran {st.cdNuevos} nuevos (de ellos {st.cdGirado} en «100% Girado») y se marcan {res.marcar.length} que ya estaban cargados.</p>}
           {st.catGirado > 0 && <p className="meta"><b>Catástrofe:</b> entran {st.catGirado} proyectos nuevos de catástrofe que están en «100% Girado» (se incluyen aunque ese estado normalmente queda fuera).</p>}
+          {st.g26 > 0 && <p className="meta"><b>100% Girado aprobados en 2026:</b> entran {st.g26} proyectos nuevos (se incluyen aunque ese estado normalmente queda fuera).</p>}
           <p className="meta">Filas leídas: {st.leidas}. Fuera de alcance (estado distinto de Aprobado, Con Anticipo Solicitado, Con Giro por Anticipo, En Ejecución o En Proceso de Cierre): {st.fueraAlcance}.{!esGab && ` De otra región (se ignoran): ${st.otraRegion}.`}{st.sinEstado && " ATENCIÓN: el archivo no trae columna «Estado», no se pudo filtrar por alcance."}</p>
           {res.rechazos.length > 0 && <>
             <p className="meta"><b>Rechazados</b> (no se guardan):</p>
@@ -2448,7 +2454,7 @@ function SecEp({ ctx, it }) {
 
 function HojaDetalle({ ctx, it }) {
   const etapa = it.cur ? it.cur.etapa : "licitacion";
-  const [sec, setSec] = useState({ licitacion: "lic", adjudicado: "adj", contratado: "con", obras: "ep", cierre: "ep" }[etapa] || "lic");
+  const [sec, setSec] = useState({ bases: "lic", licitacion: "lic", adjudicado: "adj", contratado: "con", obras: "ep", cierre: "ep" }[etapa] || "lic");
   const secciones = [["lic", "1. En licitación"], ["adj", "2. Adjudicado"], ["con", "3. Contratado"], ["ep", "4. En obras"]];
   return (
     <Hoja titulo="Detalle del proyecto" onClose={() => ctx.setHoja(null)}>

@@ -2468,6 +2468,46 @@ function HojaDetalle({ ctx, it }) {
 }
 
 // Marcar proyectos "Chile Despega" pegando una lista de códigos (solo gabinete)
+// Descarga a Excel de los proyectos en seguimiento (una hoja por región), con columnas vacías para que el equipo anote.
+async function segDescargarExcel(items, regionesIds, labelReg, nombreBase) {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  const cab = ["Código", "Comuna", "Proyecto", "Programa", "Línea", "Monto SUBDERE", "Chile Despega", "Etapa actual", "Última actualización", "Días sin actualizar", "Situación", "Detalle registrado", "Última nota", "Actualizado por", "NUEVA ETAPA (llenar)", "FECHA (dd-mm-aaaa)", "NOTA (llenar)", "QUIÉN ACTUALIZA"];
+  let hojas = 0;
+  for (const rid of regionesIds) {
+    const lista = items.filter(x => x.activo && x.p.region_id === rid).sort((a, b) => (a.p.comuna || "").localeCompare(b.p.comuna || "", "es") || (a.p.nombre || "").localeCompare(b.p.nombre || "", "es"));
+    if (lista.length === 0) continue;
+    const filas = lista.map(x => [
+      x.p.codigo || "", x.p.comuna || "", x.p.nombre || "", x.p.programa || "", SEG_LINEA[x.p.programa] || "",
+      x.p.monto_subdere || "", x.p.chile_despega ? "Sí" : "",
+      x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar",
+      x.cur ? fmtFecha(x.cur.fecha) : "", x.cur ? segDias(x.cur.fecha) : "",
+      x.est === "sin" ? "Sin actualizar" : x.est === "vie" ? "Desactualizado" : "Al día",
+      (x.det || []).join(" | "), x.cur && x.cur.nota ? x.cur.nota : "", x.cur && x.cur.autor ? x.cur.autor : "",
+      "", "", "", "",
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([cab, ...filas]);
+    ws["!cols"] = [14, 18, 50, 16, 10, 14, 10, 16, 14, 10, 14, 40, 40, 18, 20, 16, 40, 18].map(w => ({ wch: w }));
+    ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+    ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: filas.length, c: cab.length - 1 } }) };
+    XLSX.utils.book_append_sheet(wb, ws, String(labelReg(rid)).replace(/[\\/?*\[\]:]/g, " ").slice(0, 31));
+    hojas++;
+  }
+  if (hojas === 0) return 0;
+  const ins = XLSX.utils.aoa_to_sheet([
+    ["Cómo usar este archivo"],
+    ["1. Cada hoja es una región. Las columnas A a N son lo que está hoy en el panel: no las modifiques."],
+    ["2. Las columnas O a R (con «llenar») son para que el equipo anote la actualización de cada proyecto."],
+    ["3. Etapas posibles para «NUEVA ETAPA»: " + SEG_ETAPAS.map(e => e.n).join(", ") + "."],
+    ["4. El panel NO lee este archivo: quien tenga a cargo la región debe ingresar las actualizaciones en el panel (Actualizar Estado del Proyecto)."],
+    ["Descargado el " + fmtFecha(segHoy()) + "."],
+  ]);
+  ins["!cols"] = [{ wch: 110 }];
+  XLSX.utils.book_append_sheet(wb, ins, "Instrucciones");
+  XLSX.writeFile(wb, `${nombreBase}_${segHoy()}.xlsx`);
+  return hojas;
+}
+
 function HojaCD({ ctx }) {
   const { datos, fetcher, setHoja, mostrarToast, patchPrVarios } = ctx;
   const [txt, setTxt] = useState("");
@@ -2617,6 +2657,12 @@ function SeguimientoInner() {
     if (!fila) throw new Error("No se pudo guardar (sin permiso en la base de datos).");
     patchPr(it.p.id, patch);
   }
+  async function descargar(ids, base) {
+    try {
+      const n = await segDescargarExcel(items, ids, labelReg, base);
+      mostrarToast(n ? "Excel descargado." : "No hay proyectos para descargar.");
+    } catch (e) { mostrarToast("No se pudo descargar: " + segMsgError(e)); }
+  }
   async function marcarCD(it) {
     try {
       const valor = !it.p.chile_despega;
@@ -2686,6 +2732,7 @@ function SeguimientoInner() {
         <div className="actions" style={{ marginBottom: 18 }}>
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>Agregar un proyecto a mano</button>
+          <button type="button" className="btn" onClick={() => descargar(SEG_ORDEN, "proyectos_seguimiento_todas_las_regiones")}>Descargar Excel (todas las regiones)</button>
           {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Ver retirados ({retirados.length})</button>}
         </div>
         <h2>Avance de actualización por región</h2>
@@ -2819,6 +2866,7 @@ function SeguimientoInner() {
           <div className="actions" style={{ marginBottom: 12 }}>
             <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar", region })}>Agregar un proyecto a mano</button>
             <button type="button" className="btn" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
+            <button type="button" className="btn" onClick={() => descargar([region], "proyectos_seguimiento_" + region)}>Descargar Excel de la región</button>
           </div>
         )}
         {region !== "__ret" && <div className="chips" role="group" aria-label="Mostrar">

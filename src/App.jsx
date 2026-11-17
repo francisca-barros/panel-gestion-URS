@@ -1704,6 +1704,8 @@ const SEG_ETAPAS = [
   { id: "cierre", n: "En cierre", s: "Cierre solicitado o en trámite (guías C·1 y C·2)" },
 ];
 const SEG_ETAPA_IDX = Object.fromEntries(SEG_ETAPAS.map((e, i) => [e.id, i]));
+// Programas que se pueden elegir al agregar un proyecto a mano (lista cerrada, en este orden)
+const SEG_PROGRAMAS_MANUAL = ["PMU", "PMU Catastrofe", "PMU Tradicional (IRAL)", "PMB", "PMB Catastrofe", "PMB Tradicional (IRAL)", "PTRAC", "FRC", "PRBIPE", "PREAVS"];
 const SEG_LINEA = { "Tradicional": "PMU IRAL", "PMB Tradicional": "PMB IRAL", "Fondo Recuperación de Ciudades": "FRC" };
 const SEG_ESTADOS_ALCANCE = ["aprobado", "con anticipo solicitado", "con giro por anticipo", "en ejecucion", "en proceso de cierre"];
 const SEG_DIAS_DESACTUALIZADO = 30; // plazo definido por Fran (02-11-2026)
@@ -2054,7 +2056,6 @@ function HojaAgregar({ ctx, regionInicial }) {
     const [codigo, setCodigo] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
-    const programas = [...new Set(datos.pr.map(p => p.programa))].sort((a, b) => a.localeCompare(b, "es"));
     const comunasReg = [...new Set(datos.pr.filter(p => p.region_id === rid).map(p => p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
     async function guardar() {
       if (!rid) { setErr("Elige la región."); return; }
@@ -2077,7 +2078,7 @@ function HojaAgregar({ ctx, regionInicial }) {
           <input type="text" id="seg-a-com" list="seg-comunas" value={comuna} onChange={e => setComuna(e.target.value)} autoComplete="off" />
           <datalist id="seg-comunas">{comunasReg.map(c => <option key={c} value={c} />)}</datalist></div>
         <div className="fld"><label htmlFor="seg-a-prog">Programa</label>
-          <select id="seg-a-prog" value={programa} onChange={e => setPrograma(e.target.value)}><option value="">Elige un programa</option>{programas.map(p => <option key={p} value={p}>{p}{SEG_LINEA[p] ? ` (${SEG_LINEA[p]})` : ""}</option>)}</select></div>
+          <select id="seg-a-prog" value={programa} onChange={e => setPrograma(e.target.value)}><option value="">Elige un programa</option>{SEG_PROGRAMAS_MANUAL.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
         <div className="fld"><label htmlFor="seg-a-nom">Nombre del proyecto</label><textarea id="seg-a-nom" value={nombre} onChange={e => setNombre(e.target.value)} /></div>
         <div className="fld"><label htmlFor="seg-a-mon">Monto SUBDERE en pesos (opcional)</label><input type="text" inputMode="numeric" id="seg-a-mon" value={monto} onChange={e => setMonto(e.target.value)} /></div>
         <div className="fld"><label htmlFor="seg-a-cod">Código del proyecto (opcional)</label><input type="text" id="seg-a-cod" value={codigo} onChange={e => setCodigo(e.target.value)} autoComplete="off" placeholder="Si aún no lo tiene, déjalo vacío" /></div>

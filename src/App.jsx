@@ -1707,7 +1707,7 @@ const SEG_ETAPA_IDX = Object.fromEntries(SEG_ETAPAS.map((e, i) => [e.id, i]));
 const SEG_LINEA = { "Tradicional": "PMU IRAL", "PMB Tradicional": "PMB IRAL", "Fondo Recuperación de Ciudades": "FRC" };
 const SEG_ESTADOS_ALCANCE = ["aprobado", "con anticipo solicitado", "con giro por anticipo", "en ejecucion", "en proceso de cierre"];
 const SEG_DIAS_DESACTUALIZADO = 30; // plazo definido por Fran (02-11-2026)
-const SEG_ESTADO_LABEL = { sin: "Sin actualizar", vie: "Desactualizado", ok: "Al día" };
+const SEG_ESTADO_LABEL = { sin: "Sin actualizar", vie: "Desactualizado", ok: "Actualizado" };
 
 const segHoy = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const segDias = (iso) => Math.max(0, Math.round((new Date(segHoy()) - new Date(iso)) / 864e5));
@@ -1960,9 +1960,10 @@ function HojaActualizar({ ctx, it, foco }) {
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
     async function guardar() {
-      if (!etapa) { setErr("Elige en qué está el proyecto."); return; }
+      if (!etapa) { setErr("Elige el estado del proyecto."); return; }
       if (!fecha) { setErr("Indica la fecha."); return; }
       if (fecha > segHoy()) { setErr("La fecha no puede ser futura."); return; }
+      if (etapa === "licitacion" && !nota.trim()) { setErr("Para el estado «En licitación» la nota es obligatoria: escribe el código de la licitación."); return; }
       setBusy(true); setErr("");
       try {
         const cod = codigo.trim();
@@ -1978,7 +1979,7 @@ function HojaActualizar({ ctx, it, foco }) {
         <h2>{it.p.nombre}</h2>
         <p className="meta">{it.p.comuna} · {it.p.programa}</p>
         <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend style={{ fontWeight: 700, marginBottom: 8 }}>¿En qué está hoy este proyecto?</legend>
+          <legend style={{ fontWeight: 700, marginBottom: 8 }}>Estado del proyecto</legend>
           {SEG_ETAPAS.map((s, i) => (
             <label key={s.id} className={"opt" + (etapa === s.id ? " cur" : "")}>
               <input type="radio" name="etapa" checked={etapa === s.id} onChange={() => setEtapa(s.id)} />
@@ -1992,8 +1993,8 @@ function HojaActualizar({ ctx, it, foco }) {
             <p className="meta">Este proyecto aún no tiene código. Anótalo aquí cuando lo tenga.</p></div>
         )}
         <div className="fld"><label htmlFor="seg-fecha">Fecha</label><input type="date" id="seg-fecha" value={fecha} max={segHoy()} onChange={e => setFecha(e.target.value)} /></div>
-        <div className="fld"><label htmlFor="seg-nota">Nota (opcional)</label>
-          <textarea id="seg-nota" value={nota} onChange={e => setNota(e.target.value)} placeholder="Por ejemplo: licitación publicada, se reciben ofertas hasta el 20 de noviembre." /></div>
+        <div className="fld"><label htmlFor="seg-nota">{etapa === "licitacion" ? "Nota: código de la licitación (obligatorio)" : "Nota (opcional)"}</label>
+          <textarea id="seg-nota" value={nota} onChange={e => setNota(e.target.value)} placeholder={etapa === "licitacion" ? "Escribe el código de la licitación. Ejemplo: 1234-56-LP26" : "Por ejemplo: licitación publicada, se reciben ofertas hasta el 20 de noviembre."} /></div>
         {previas.length > 0 && <><p className="meta"><b>Anotaciones anteriores</b></p><ul className="hist">{previas.map(a => <li key={a.id}>{textoHist(a)}</li>)}</ul></>}
         {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
         <div className="actions"><button type="button" className="btn main" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar"}</button><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>
@@ -2492,7 +2493,7 @@ async function segDescargarExcel(items, regionesIds, labelReg, nombreBase) {
       x.p.monto_subdere || "", x.p.chile_despega ? "Sí" : "",
       x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar",
       x.cur ? fmtFecha(x.cur.fecha) : "", x.cur ? segDias(x.cur.fecha) : "",
-      x.est === "sin" ? "Sin actualizar" : x.est === "vie" ? "Desactualizado" : "Al día",
+      x.est === "sin" ? "Sin actualizar" : x.est === "vie" ? "Desactualizado" : "Actualizado",
       (x.det || []).join(" | "), x.cur && x.cur.nota ? x.cur.nota : "", x.cur && x.cur.autor ? x.cur.autor : "",
       "", "", "", "",
     ]);
@@ -2567,6 +2568,7 @@ function SeguimientoInner() {
   const [flt, setFlt] = useState("all");
   const [q, setQ] = useState("");
   const [com, setCom] = useState("");
+  const [etp, setEtp] = useState("");
   const [lim, setLim] = useState(25);
   const [hoja, setHoja] = useState(null);
   const [soloCD, setSoloCD] = useState(false);
@@ -2627,7 +2629,7 @@ function SeguimientoInner() {
   const asValido = esGab || SEG_ORDEN.includes(as);
   const region = esGab ? drill : as;
 
-  const elegir = (a) => { try { localStorage.setItem("seg-as", a); } catch (e) { /* sin almacenamiento */ } setAs(a); setDrill(null); setLim(25); setFlt("all"); setQ(""); setCom(""); window.scrollTo(0, 0); };
+  const elegir = (a) => { try { localStorage.setItem("seg-as", a); } catch (e) { /* sin almacenamiento */ } setAs(a); setDrill(null); setLim(25); setFlt("all"); setQ(""); setCom(""); setEtp(""); window.scrollTo(0, 0); };
   const cambiar = () => { try { localStorage.removeItem("seg-as"); } catch (e) { /* ignorar */ } setAs(""); setDrill(null); setHoja(null); };
   const mostrarToast = (msg, undo) => { setToast({ msg, undo }); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 8000); };
   const recargar = () => setTick(t => t + 1);
@@ -2681,15 +2683,6 @@ function SeguimientoInner() {
       patchPr(it.p.id, { chile_despega: valor });
     } catch (e) { mostrarToast("No se pudo cambiar la marca: " + segMsgError(e)); }
   }
-  async function avanzar(it) {
-    const i = it.cur ? SEG_ETAPA_IDX[it.cur.etapa] : -1;
-    if (i < 0 || i >= SEG_ETAPAS.length - 1) return;
-    const sig = SEG_ETAPAS[i + 1];
-    try {
-      const fila = await nuevaAnotacion(it, { tipo: "avance", etapa: sig.id, fecha: segHoy(), nota: null });
-      mostrarToast(`Listo: ahora está en «${sig.n}».`, async () => { try { await fetcher.updateRow("seg_anotaciones", fila.id, { anulada: true }); patchAn(fila.id, { anulada: true }); } catch (e) { mostrarToast("No se pudo deshacer: " + segMsgError(e)); } });
-    } catch (e) { mostrarToast("No se pudo guardar: " + segMsgError(e)); }
-  }
   async function reintegrar(it) {
     try {
       await nuevaAnotacion(it, { tipo: "reintegro", etapa: null, fecha: segHoy(), nota: null });
@@ -2735,7 +2728,7 @@ function SeguimientoInner() {
       <>
         <div className="kpis">
           <div className="kpi"><b>{T.t}</b><span>proyectos en seguimiento</span></div>
-          <div className="kpi"><b>{T.ok}</b><span>al día (actualizados en los últimos {SEG_DIAS_DESACTUALIZADO} días)</span></div>
+          <div className="kpi"><b>{T.ok}</b><span>actualizados (en los últimos {SEG_DIAS_DESACTUALIZADO} días)</span></div>
           <div className="kpi"><b>{T.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días sin anotar)</span></div>
           <div className="kpi"><b>{T.sin}</b><span>sin actualizar (nunca anotados)</span></div>
         </div>
@@ -2749,7 +2742,7 @@ function SeguimientoInner() {
         <p className="meta">Toca una región para ver sus proyectos.</p>
         <div className="bars">
           {SEG_ORDEN.map(id => { const b = por[id], pc = b.t ? Math.round(100 * b.ok / b.t) : 0; return (
-            <div key={id} className="bar" data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>
+            <div key={id} className="bar" data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); setEtp(""); window.scrollTo(0, 0); }}>
               <button type="button">{labelReg(id)} · {b.ok} de {b.t}</button>
               <div className="track" aria-hidden="true"><div className="fill" style={{ width: pc + "%" }} /></div>
               <b>{pc}%</b>
@@ -2808,7 +2801,7 @@ function SeguimientoInner() {
               )}
               <div className="actions" style={{ marginTop: 10 }}>
                 <button type="button" className="btn" onClick={() => setCdRegion(null)}>Cerrar listado</button>
-                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); window.scrollTo(0, 0); }}>Ir a actualizar los proyectos de la región</button>
+                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); setEtp(""); window.scrollTo(0, 0); }}>Ir a actualizar los proyectos de la región</button>
               </div>
             </div>
           );
@@ -2819,8 +2812,6 @@ function SeguimientoInner() {
 
   const Tarjeta = ({ it }) => {
     const { p, cur, est } = it;
-    const i = cur ? SEG_ETAPA_IDX[cur.etapa] : -1;
-    const sig = i >= 0 && i < SEG_ETAPAS.length - 1 ? SEG_ETAPAS[i + 1] : null;
     if (!it.activo) return (
       <article key={p.id} className="card">
         <h3>{p.nombre}</h3>
@@ -2833,11 +2824,10 @@ function SeguimientoInner() {
       <article key={p.id} className={"card " + est}>
         <h3>{p.nombre}</h3>
         <div className="meta">{p.comuna} · {p.programa}{SEG_LINEA[p.programa] && <> <span className="tag">{SEG_LINEA[p.programa]}</span></>} · {segClp(p.monto_subdere)} · {p.codigo ? "Código " + p.codigo : <span className="pill sin">Sin código, completar por URS</span>}</div>
-        <div className="row"><span className="meta">En qué está:</span><span className={"pill " + est}>{cur ? SEG_ETAPAS[SEG_ETAPA_IDX[cur.etapa]].n : "Sin actualizar"}</span>{p.chile_despega && <span className="tag">Chile Despega</span>}</div>
+        <div className="row"><span className="meta">Estado:</span><span className={"pill " + est}>{cur ? SEG_ETAPAS[SEG_ETAPA_IDX[cur.etapa]].n : "Sin actualizar"}</span>{p.chile_despega && <span className="tag">Chile Despega</span>}</div>
         {it.det.length > 0 && <div className="resumen-det">{it.det.map((t, k) => <div key={k} className="meta">{t}</div>)}</div>}
         {cur && <div className="meta">Última anotación: {fmtFecha(cur.fecha)} (hace {segDias(cur.fecha)} días){cur.autor ? ` · por ${cur.autor}` : ""}{cur.nota ? `. Nota: ${cur.nota}` : ""}</div>}
         <div className="actions">
-          {sig && <button type="button" className="btn go" onClick={() => avanzar(it)}>Pasar a: {sig.n}</button>}
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "actualizar", id: p.id })}>Actualizar Estado del Proyecto</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "detalle", id: p.id })}>Detalle: licitación, contrato y obras</button>
           {!p.codigo && <button type="button" className="btn" onClick={() => setHoja({ tipo: "actualizar", id: p.id, foco: true })}>Ingresar código</button>}
@@ -2856,11 +2846,10 @@ function SeguimientoInner() {
     act.forEach(x => { cnt[x.est]++; });
     const comunas = [...new Set(todas.map(x => x.p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
     const ql = q.trim().toLowerCase();
-    const filtrados = base.filter(x => (!com || x.p.comuna === com) &&
+    const filtrados = base.filter(x => (!com || x.p.comuna === com) && (!etp || (x.cur && x.cur.etapa === etp)) &&
       (flt === "all" || flt === "ret" || (flt === "nocode" ? !x.p.codigo : x.est === flt)) &&
       (!ql || `${x.p.nombre} ${x.p.comuna} ${x.p.codigo || ""}`.toLowerCase().includes(ql)));
-    const chips = [["all", "Todos"], ["sin", "Sin actualizar"], ["vie", "Desactualizados"], ["ok", "Al día"], ["nocode", "Sin código"]];
-    chips.push(["ret", `Retirados (${todas.filter(x => !x.activo).length})`]);
+    const chips = [["all", "Todos"], ["ok", "Actualizados"], ["vie", "Desactualizados"], ["sin", "Sin actualizar"], ["ret", `Retirados (${todas.filter(x => !x.activo).length})`], ["nocode", "Sin código"]];
     const titulo = region === "__ret" ? "Proyectos retirados del seguimiento" : `Región de ${labelReg(region)}`;
     return (
       <>
@@ -2870,7 +2859,7 @@ function SeguimientoInner() {
           <div className="kpi"><b>{act.length}</b><span>proyectos en seguimiento</span></div>
           <div className="kpi"><b>{cnt.sin}</b><span>sin actualizar</span></div>
           <div className="kpi"><b>{cnt.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días)</span></div>
-          <div className="kpi"><b>{cnt.ok}</b><span>al día</span></div>
+          <div className="kpi"><b>{cnt.ok}</b><span>actualizados</span></div>
         </div>}
         {region !== "__ret" && (
           <div className="actions" style={{ marginBottom: 12 }}>
@@ -2887,6 +2876,10 @@ function SeguimientoInner() {
           <select aria-label="Comuna" value={com} onChange={e => { setCom(e.target.value); setLim(25); }}>
             <option value="">Todas las comunas</option>
             {comunas.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select aria-label="Estado" value={etp} onChange={e => { setEtp(e.target.value); setLim(25); }}>
+            <option value="">Todos los estados</option>
+            {SEG_ETAPAS.map(e => <option key={e.id} value={e.id}>{e.n}</option>)}
           </select>
         </div>
         <p className="meta">{filtrados.length} proyectos</p>

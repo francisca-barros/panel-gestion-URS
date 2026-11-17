@@ -2040,6 +2040,168 @@ function HojaRetiro({ ctx, it }) {
     );
 }
 
+// ---------- Limpieza masiva con el «Resumen financiero» de SUBDERE en línea ----------
+const SEG_CORTE_2026 = "2026-03-11";
+const SEG_MOTIVO_LIMPIEZA = "Limpieza masiva: aprobado antes del 11-03-2026, sin transferencia este año y 100% transferido";
+function segFechaISO(v) {
+  if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() + 12 * 3600 * 1000).toISOString().slice(0, 10);
+  if (typeof v === "number" && v > 20000 && v < 80000) return new Date(Date.UTC(1899, 11, 30) + v * 86400000).toISOString().slice(0, 10);
+  const t = String(v == null ? "" : v).trim();
+  let m = t.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+function segMonto(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const t = String(v == null ? "" : v).replace(/[^\d,-]/g, "").split(",")[0];
+  if (t === "" || t === "-") return null;
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) ? n : null;
+}
+async function segLeerCrudo(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const cabecera = new TextDecoder("latin1").decode(bytes.slice(0, 3000)).toLowerCase();
+  if (/<html|<table|<!doctype html/.test(cabecera)) return segLeerMatriz(file);
+  const XLSX = await import("xlsx");
+  const wb = XLSX.read(bytes, { type: "array", cellDates: true });
+  let mejor = [], n = -1;
+  for (const nm of wb.SheetNames) {
+    const m = XLSX.utils.sheet_to_json(wb.Sheets[nm], { header: 1, defval: "", raw: true });
+    if (m.length > n) { n = m.length; mejor = m; }
+  }
+  return mejor;
+}
+// Devuelve un Map código -> { fecha, ta (transferido este año), saldo (por transferir), estado }
+function segLeerResumen(matriz) {
+  const norm = (c) => segNorm(c).replace(/\./g, "");
+  let hi = -1, col = {};
+  for (let i = 0; i < Math.min(matriz.length, 40); i++) {
+    const f = matriz[i].map(norm);
+    const c = { cod: f.indexOf("id proyecto"), fecha: f.findIndex(x => x === "fecha asignacion" || x === "fecha aprobacion"), ta: f.findIndex(x => x.startsWith("transf ano actual")), saldo: f.indexOf("monto vigente"), asig: f.findIndex(x => x.startsWith("monto asignado")), tot: f.indexOf("total transferido"), estado: f.indexOf("estado proyecto") };
+    if (c.cod >= 0 && c.ta >= 0 && c.fecha >= 0) { hi = i; col = c; break; }
+  }
+  if (hi < 0) return null;
+  const mapa = new Map();
+  for (const r of matriz.slice(hi + 1)) {
+    const cod = String(r[col.cod] == null ? "" : r[col.cod]).trim();
+    if (!cod) continue;
+    const ta = segMonto(r[col.ta]);
+    let saldo = col.saldo >= 0 ? segMonto(r[col.saldo]) : null;
+    if (saldo == null && col.asig >= 0 && col.tot >= 0) { const a = segMonto(r[col.asig]), t = segMonto(r[col.tot]); if (a != null && t != null) saldo = a - t; }
+    mapa.set(cod, { fecha: segFechaISO(r[col.fecha]), ta, saldo, estado: col.estado >= 0 ? String(r[col.estado] || "") : "" });
+  }
+  return mapa;
+}
+
+function HojaLimpieza({ ctx }) {
+  const { datos, autor, fetcher, labelReg, recargar, setHoja, mostrarToast } = ctx;
+    const [fase, setFase] = useState("elegir"); // elegir | leyendo | revisar | guardando | listo
+    const [err, setErr] = useState("");
+    const [res, setRes] = useState(null);
+    const [sel, setSel] = useState(new Set());
+    const [nHecho, setNHecho] = useState(0);
+    async function leer(files) {
+      if (!files || !files.length) return;
+      setFase("leyendo"); setErr("");
+      try {
+        const todo = new Map(); const sinFormato = [];
+        for (const f of files) {
+          const m = segLeerResumen(await segLeerCrudo(f));
+          if (!m) { sinFormato.push(f.name); continue; }
+          m.forEach((v, k) => todo.set(k, v));
+        }
+        if (sinFormato.length) throw new Error(`No reconozco el formato de: ${sinFormato.join(", ")}. Debe ser el «Resumen financiero» con las columnas Id proyecto, Fecha asignación, Transf. Año Actual y Monto Vigente.`);
+        const conAvance = new Set(datos.an.filter(a => a.tipo === "avance" && !a.anulada).map(a => a.proyecto_id));
+        const activos = datos.pr.filter(p => p.activo && p.codigo);
+        const reg = new Set(activos.filter(p => todo.has(p.codigo)).map(p => p.region_id));
+        const cands = [], cons = { n: 0 }, noEval = [];
+        let sinDato = 0;
+        for (const p of activos) {
+          if (!reg.has(p.region_id)) continue;
+          const e = todo.get(p.codigo);
+          if (!e) { noEval.push(p); continue; }
+          if (!e.fecha || e.ta == null || e.saldo == null) { sinDato++; continue; }
+          if (e.fecha < SEG_CORTE_2026 && e.ta === 0 && e.saldo === 0) {
+            const alertas = [];
+            if (p.chile_despega) alertas.push("Chile Despega");
+            if (segNorm(p.nombre + " " + p.programa).includes("catastrofe")) alertas.push("Catástrofe");
+            cands.push({ p, e, alertas, act: conAvance.has(p.id) });
+          } else cons.n++;
+        }
+        cands.sort((a, b) => SEG_ORDEN.indexOf(a.p.region_id) - SEG_ORDEN.indexOf(b.p.region_id) || a.p.comuna.localeCompare(b.p.comuna, "es") || a.p.nombre.localeCompare(b.p.nombre, "es"));
+        setRes({ cands, conservan: cons.n, noEval, sinDato, regiones: [...reg], nArchivos: files.length, nCodigos: todo.size });
+        setSel(new Set(cands.filter(c => c.alertas.length === 0).map(c => c.p.id)));
+        setFase("revisar");
+      } catch (e) { setErr("No pude leer el archivo: " + (e.message || e)); setFase("elegir"); }
+    }
+    const alertados = res ? res.cands.filter(c => c.alertas.length > 0) : [];
+    const marcarSi = (fn, val) => setSel(prev => { const n = new Set(prev); res.cands.forEach(c => { if (fn(c)) { if (val) n.add(c.p.id); else n.delete(c.p.id); } }); return n; });
+    async function retirar() {
+      const ids = res.cands.filter(c => sel.has(c.p.id)).map(c => c.p.id);
+      if (!ids.length) return;
+      setFase("guardando"); setErr(""); let n = 0;
+      try {
+        for (let i = 0; i < ids.length; i += 150) {
+          const lote = ids.slice(i, i + 150);
+          await fetcher.insertMany("seg_anotaciones", lote.map(id => ({ proyecto_id: id, tipo: "retiro", etapa: null, fecha: segHoy(), nota: SEG_MOTIVO_LIMPIEZA, autor, perfil: "gabinete" })));
+          await fetcher.updateWhere("seg_proyectos", `id=in.(${lote.join(",")})`, { activo: false });
+          n += lote.length; setNHecho(n);
+        }
+        recargar(); setFase("listo");
+      } catch (e) { setErr(`Se retiraron ${n} proyectos y luego falló: ${segMsgError(e)}. Vuelve a cargar el archivo: los ya retirados no aparecerán de nuevo.`); recargar(); setFase("revisar"); }
+    }
+    const MAX = 600;
+    return (
+      <Hoja titulo="Limpiar con Resumen financiero" onClose={() => setHoja(null)}>
+        <h2>Limpiar el seguimiento con el Resumen financiero</h2>
+        {fase === "elegir" && <>
+          <p className="meta">Sube el «Resumen financiero» de SUBDERE en línea de una o varias regiones. El panel propone <b>retirar del seguimiento</b> los proyectos que cumplen las tres condiciones: se aprobaron antes del 11-03-2026, no tuvieron transferencia este año y ya están 100% transferidos (saldo por transferir en 0). Los demás se conservan. Antes de retirar nada verás la lista y podrás desmarcar.</p>
+          <p className="meta">Retirar no borra: quedan en «Retirados» con el motivo y se pueden reintegrar.</p>
+          <div className="fld"><label htmlFor="seg-lim-file">Archivos (puedes elegir varios a la vez)</label><input type="file" id="seg-lim-file" multiple accept=".xls,.xlsx,.csv" onChange={e => leer([...e.target.files])} /></div>
+          {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+          <div className="actions"><button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button></div>
+        </>}
+        {fase === "leyendo" && <p>Leyendo los archivos… puede tardar unos segundos.</p>}
+        {(fase === "revisar" || fase === "guardando") && res && <>
+          <div className="kpis">
+            <div className="kpi"><b>{res.cands.length}</b><span>cumplen las tres condiciones</span></div>
+            <div className="kpi"><b>{res.conservan}</b><span>se conservan</span></div>
+            <div className="kpi"><b>{res.noEval.length}</b><span>no están en el archivo (no se tocan)</span></div>
+          </div>
+          <p className="meta">Regiones evaluadas: {res.regiones.map(labelReg).join(", ") || "ninguna"}. Archivos: {res.nArchivos}. {res.sinDato > 0 && `Sin fecha o transferencias en el archivo (no se tocan): ${res.sinDato}.`}</p>
+          {alertados.length > 0 && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>⚠ ALERTA: {alertados.length} de estos proyectos son de Chile Despega o de catástrofe ({alertados.filter(c => c.alertas.includes("Chile Despega")).length} Chile Despega, {alertados.filter(c => c.alertas.includes("Catástrofe")).length} catástrofe). Vienen DESMARCADOS: no se retiran a menos que los marques.</p>}
+          <div className="actions" style={{ marginBottom: 8 }}>
+            <button type="button" className="btn sm" onClick={() => marcarSi(() => true, true)}>Marcar todos</button>
+            <button type="button" className="btn sm" onClick={() => marcarSi(() => true, false)}>Desmarcar todos</button>
+            <button type="button" className="btn sm" onClick={() => marcarSi(c => c.alertas.length > 0, false)}>Desmarcar los con alerta</button>
+            <button type="button" className="btn sm" onClick={() => marcarSi(c => c.act, false)}>Desmarcar los ya actualizados por la URS</button>
+          </div>
+          <div className="tw"><table className="tcom"><thead><tr><th></th><th>Región</th><th>Comuna</th><th>Proyecto</th><th>Código</th><th>Estado SEL</th><th>Aprobado</th><th>Panel</th><th>Alerta</th></tr></thead><tbody>
+            {res.cands.slice(0, MAX).map(c => (
+              <tr key={c.p.id} style={c.alertas.length ? { background: "var(--alertbg, rgba(200,60,40,.10))" } : undefined}>
+                <td><input type="checkbox" aria-label={"Retirar " + c.p.codigo} checked={sel.has(c.p.id)} onChange={() => setSel(prev => { const n = new Set(prev); if (n.has(c.p.id)) n.delete(c.p.id); else n.add(c.p.id); return n; })} /></td>
+                <td style={{ textAlign: "left" }}>{labelReg(c.p.region_id)}</td><td style={{ textAlign: "left" }}>{c.p.comuna}</td><td style={{ textAlign: "left", whiteSpace: "normal" }}>{c.p.nombre}</td><td style={{ textAlign: "left" }}>{c.p.codigo}</td>
+                <td style={{ textAlign: "left" }}>{c.e.estado || c.p.estado_subdere || "—"}</td><td>{fmtFecha(c.e.fecha)}</td><td>{c.act ? "ya actualizado" : "sin actualizar"}</td>
+                <td style={{ textAlign: "left", fontWeight: 700 }}>{c.alertas.length ? "⚠ " + c.alertas.join(" + ") : ""}</td>
+              </tr>
+            ))}
+          </tbody></table></div>
+          {res.cands.length > MAX && <p className="meta">Se muestran los primeros {MAX} de {res.cands.length}. Los botones de marcar y desmarcar afectan a todos.</p>}
+          {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button type="button" className="btn main" disabled={fase === "guardando" || sel.size === 0} onClick={retirar}>{fase === "guardando" ? `Retirando… ${nHecho} de ${sel.size}` : `Retirar ${sel.size} proyectos del seguimiento`}</button>
+            <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
+          </div>
+        </>}
+        {fase === "listo" && <>
+          <p><b>Listo: se retiraron {nHecho} proyectos del seguimiento.</b> Quedan en «Retirados» con el motivo anotado.</p>
+          <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
+        </>}
+      </Hoja>
+    );
+}
+
 function HojaEliminar({ ctx, it }) {
   const { fetcher, recargar, setHoja, mostrarToast } = ctx;
     const [err, setErr] = useState("");
@@ -2780,6 +2942,7 @@ function SeguimientoInner() {
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>Agregar un proyecto a mano</button>
           <button type="button" className="btn" onClick={() => descargar(SEG_ORDEN, "proyectos_seguimiento_todas_las_regiones")}>Descargar Excel (todas las regiones)</button>
+          <button type="button" className="btn" onClick={() => setHoja({ tipo: "limpieza" })}>Limpiar con Resumen financiero</button>
           {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Ver retirados ({retirados.length})</button>}
         </div>
         <h2>Avance de actualización por región</h2>
@@ -2956,6 +3119,7 @@ function SeguimientoInner() {
       </div>
       {hoja && hoja.tipo === "actualizar" && hojaItem && <HojaActualizar ctx={ctx} it={hojaItem} foco={hoja.foco} />}
       {hoja && hoja.tipo === "retiro" && hojaItem && <HojaRetiro ctx={ctx} it={hojaItem} />}
+      {hoja && hoja.tipo === "limpieza" && <HojaLimpieza ctx={ctx} />}
       {hoja && hoja.tipo === "eliminar" && hojaItem && <HojaEliminar ctx={ctx} it={hojaItem} />}
       {hoja && hoja.tipo === "historial" && hojaItem && <HojaHistorial ctx={ctx} it={hojaItem} />}
       {hoja && hoja.tipo === "agregar" && <HojaAgregar ctx={ctx} regionInicial={hoja.region} />}

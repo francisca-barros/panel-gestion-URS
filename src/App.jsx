@@ -1470,7 +1470,14 @@ function makeSupabaseFetcher(url, key) {
     if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
 
-  return { fetchTable, insertRow, insertMany, updateRow, updateWhere, deleteRow };
+  // Borra y devuelve las filas borradas (para detectar si la base de datos no lo permitió)
+  async function deleteRowVerificado(table, id) {
+    const res = await fetch(`${base}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: { ...headers, Prefer: "return=representation" } });
+    if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    return res.json();
+  }
+
+  return { fetchTable, insertRow, insertMany, updateRow, updateWhere, deleteRow, deleteRowVerificado };
 }
 
 // ---------- Carga de datos desde Supabase (reemplaza el REGIONS hardcodeado) ----------
@@ -1778,7 +1785,7 @@ function segRegionId(v) {
   return null;
 }
 // Analiza la matriz leída. regionPermitida: id de región (jefe URS) o null (gabinete: todas)
-function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigosCD = new Set() }) {
+function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigosCD = new Set(), codigosRetirados = new Set() }) {
   let hi = -1, col = {};
   for (let i = 0; i < Math.min(matriz.length, 40) && hi < 0; i++) {
     const celdas = matriz[i].map(segNorm);
@@ -1790,7 +1797,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
   }
   if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
   const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
-  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, reintegrar: [], cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
   const recs = [], rechazos = [], vistos = new Set();
   for (let i = hi + 1; i < matriz.length; i++) {
     const r = matriz[i];
@@ -1808,7 +1815,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     if (!rid) { rech("región no reconocida"); continue; }
     if (regionPermitida && rid !== regionPermitida) { st.otraRegion++; continue; }
     if (!codigo) { rech("sin código (agrégalo a mano para evitar duplicados)"); continue; }
-    if (codigosExistentes.has(codigo)) { st.yaExistian++; continue; }
+    if (codigosExistentes.has(codigo)) { if (codigosRetirados.has(codigo)) st.reintegrar.push(codigo); else st.yaExistian++; continue; }
     if (vistos.has(codigo)) { rech("código repetido dentro del archivo"); continue; }
     const comuna = segTitulo(get("comuna", r)), programa = get("programa", r);
     if (!comuna || !nombre || !programa) { rech("faltan datos (comuna, programa o nombre)"); continue; }
@@ -2033,6 +2040,31 @@ function HojaRetiro({ ctx, it }) {
     );
 }
 
+function HojaEliminar({ ctx, it }) {
+  const { fetcher, recargar, setHoja, mostrarToast } = ctx;
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    async function eliminar() {
+      setBusy(true); setErr("");
+      try {
+        const filas = await fetcher.deleteRowVerificado("seg_proyectos", it.p.id);
+        if (!filas || filas.length === 0) throw new Error("La base de datos no permitió eliminarlo (falta correr el SQL «seguimiento_eliminar.sql»).");
+        recargar(); setHoja(null);
+        mostrarToast("Proyecto eliminado del panel.");
+      } catch (e) { setErr(segMsgError(e)); setBusy(false); }
+    }
+    return (
+      <Hoja titulo="Eliminar del panel" onClose={() => setHoja(null)}>
+        <h2>¿Estás seguro de eliminar este proyecto del panel?</h2>
+        <p className="meta"><b>{it.p.nombre}</b><br />{it.p.comuna} · {it.p.programa}{it.p.codigo ? " · Código " + it.p.codigo : ""}</p>
+        <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>Esta acción no se puede deshacer.</p>
+        <p className="meta">Se borra el proyecto junto con todo su historial, su detalle de licitación, contrato y estados de pago. Si solo quieres sacarlo de las listas, déjalo en «Retirados».</p>
+        {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
+        <div className="actions"><button type="button" className="btn main" disabled={busy} onClick={eliminar}>{busy ? "Eliminando…" : "Sí, eliminar definitivamente"}</button><button type="button" className="btn" onClick={() => setHoja(null)}>No, cancelar</button></div>
+      </Hoja>
+    );
+}
+
 function HojaHistorial({ ctx, it }) {
   const { setHoja } = ctx;
   return (
@@ -2061,7 +2093,9 @@ function HojaAgregar({ ctx, regionInicial }) {
       if (!rid) { setErr("Elige la región."); return; }
       if (!comuna.trim() || !programa || !nombre.trim()) { setErr("Faltan datos: comuna, programa y nombre son obligatorios."); return; }
       const cod = codigo.trim();
-      if (cod && datos.pr.some(p => p.codigo === cod)) { setErr("Ese código ya existe en el panel."); return; }
+      const ex = cod ? datos.pr.find(p => p.codigo === cod) : null;
+      if (ex && !ex.activo) { setErr("Ese proyecto ya existe, pero está retirado del seguimiento. Ciérrame, entra al filtro «Retirados» de su región y presiona «Reintegrar al seguimiento»."); return; }
+      if (ex) { setErr("Ese código ya existe en el panel."); return; }
       const m = monto.trim() ? parseInt(monto.replace(/[^\d]/g, ""), 10) : null;
       setBusy(true); setErr("");
       try {
@@ -2101,7 +2135,9 @@ function HojaCarga({ ctx }) {
       try {
         const matriz = await segLeerMatriz(file);
         const codigosCD = new Set(esGab ? cdTxt.split(/[\n\r\t;]+/).map(x => x.trim()).filter(Boolean) : []);
-        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), autor, codigosCD });
+        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), codigosRetirados: new Set(datos.pr.filter(p => !p.activo && p.codigo).map(p => p.codigo)), autor, codigosCD });
+        const idRet = new Map(datos.pr.filter(p => !p.activo && p.codigo).map(p => [p.codigo, p.id]));
+        r.reintegrar = r.stats.reintegrar.map(c => idRet.get(c)).filter(Boolean);
         if (r.error) { setErr(r.error); setFase("elegir"); return; }
         r.marcar = datos.pr.filter(p => p.codigo && codigosCD.has(p.codigo) && !p.chile_despega).map(p => p.id); // ya cargados que se marcarán Chile Despega
         r.nCD = codigosCD.size;
@@ -2116,6 +2152,12 @@ function HojaCarga({ ctx }) {
         for (let i = 0; i < res.recs.length; i += LOTE) {
           await fetcher.insertMany("seg_proyectos", res.recs.slice(i, i + LOTE));
           n += Math.min(LOTE, res.recs.length - i); setNGuardados(n);
+        }
+        const rein = res.reintegrar || [];
+        for (let i = 0; i < rein.length; i += 150) {
+          const lote = rein.slice(i, i + 150);
+          await fetcher.insertMany("seg_anotaciones", lote.map(id => ({ proyecto_id: id, tipo: "reintegro", etapa: null, fecha: segHoy(), nota: "Reintegrado al volver a cargarlo desde Excel", autor, perfil: esGab ? "gabinete" : as })));
+          await fetcher.updateWhere("seg_proyectos", `id=in.(${lote.join(",")})`, { activo: true });
         }
         for (let i = 0; i < (res.marcar || []).length; i += 150) await fetcher.updateWhere("seg_proyectos", `id=in.(${res.marcar.slice(i, i + 150).join(",")})`, { chile_despega: true });
         recargar(); setFase("listo");
@@ -2136,6 +2178,7 @@ function HojaCarga({ ctx }) {
         {(fase === "resumen" || fase === "guardando") && st && <>
           <div className="kpis">
             <div className="kpi"><b>{res.recs.length}</b><span>proyectos nuevos que entran</span></div>
+            {(res.reintegrar || []).length > 0 && <div className="kpi"><b>{res.reintegrar.length}</b><span>estaban retirados y se reintegran</span></div>}
             <div className="kpi"><b>{st.yaExistian}</b><span>ya estaban en el panel (se omiten)</span></div>
             <div className="kpi"><b>{res.rechazos.length}</b><span>rechazados</span></div>
           </div>
@@ -2152,12 +2195,12 @@ function HojaCarga({ ctx }) {
           </>}
           {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
           <div className="actions" style={{ marginTop: 12 }}>
-            {(res.recs.length > 0 || res.marcar.length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : (res.recs.length > 0 ? `Guardar ${res.recs.length} proyectos` : `Marcar ${res.marcar.length} como Chile Despega`)}</button>}
+            {(res.recs.length > 0 || res.marcar.length > 0 || (res.reintegrar || []).length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : (res.recs.length > 0 ? `Guardar ${res.recs.length} proyectos` + ((res.reintegrar || []).length > 0 ? ` y reintegrar ${res.reintegrar.length}` : "") : ((res.reintegrar || []).length > 0 ? `Reintegrar ${res.reintegrar.length} proyectos retirados` : `Marcar ${res.marcar.length} como Chile Despega`))}</button>}
             <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
           </div>
         </>}
         {fase === "listo" && <>
-          <p><b>{res && res.recs.length === 0 ? `Listo: se marcaron ${res.marcar.length} proyectos como Chile Despega.` : `Listo: se guardaron ${nGuardados} proyectos.`}</b></p>
+          <p><b>{res && res.recs.length === 0 && (res.reintegrar || []).length === 0 ? `Listo: se marcaron ${res.marcar.length} proyectos como Chile Despega.` : `Listo: se guardaron ${nGuardados} proyectos nuevos${(res.reintegrar || []).length > 0 ? ` y se reintegraron ${res.reintegrar.length} que estaban retirados` : ""}.`}</b></p>
           <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
         </>}
         {err && fase === "elegir" && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
@@ -2818,7 +2861,7 @@ function SeguimientoInner() {
         <h3>{p.nombre}</h3>
         <div className="meta">{p.comuna} · {p.programa}{SEG_LINEA[p.programa] && <> <span className="tag">{SEG_LINEA[p.programa]}</span></>} · {segClp(p.monto_subdere)} · {p.codigo ? "Código " + p.codigo : "Sin código"}</div>
         <div className="meta">Retirado del seguimiento{it.retiro ? `: ${fmtFecha(it.retiro.fecha)} por ${it.retiro.autor}${it.retiro.nota ? `. Motivo: ${it.retiro.nota}` : ""}` : ""}</div>
-        <div className="actions"><button type="button" className="btn go" onClick={() => reintegrar(it)}>Reintegrar al seguimiento</button><button type="button" className="btn" onClick={() => setHoja({ tipo: "historial", id: p.id })}>Ver historial</button></div>
+        <div className="actions"><button type="button" className="btn go" onClick={() => reintegrar(it)}>Reintegrar al seguimiento</button><button type="button" className="btn" onClick={() => setHoja({ tipo: "historial", id: p.id })}>Ver historial</button><button type="button" className="btn sm" onClick={() => setHoja({ tipo: "eliminar", id: p.id })}>Eliminar del panel</button></div>
       </article>
     );
     return (
@@ -2913,6 +2956,7 @@ function SeguimientoInner() {
       </div>
       {hoja && hoja.tipo === "actualizar" && hojaItem && <HojaActualizar ctx={ctx} it={hojaItem} foco={hoja.foco} />}
       {hoja && hoja.tipo === "retiro" && hojaItem && <HojaRetiro ctx={ctx} it={hojaItem} />}
+      {hoja && hoja.tipo === "eliminar" && hojaItem && <HojaEliminar ctx={ctx} it={hojaItem} />}
       {hoja && hoja.tipo === "historial" && hojaItem && <HojaHistorial ctx={ctx} it={hojaItem} />}
       {hoja && hoja.tipo === "agregar" && <HojaAgregar ctx={ctx} regionInicial={hoja.region} />}
       {hoja && hoja.tipo === "carga" && <HojaCarga ctx={ctx} />}

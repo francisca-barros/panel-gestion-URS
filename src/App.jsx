@@ -1785,7 +1785,7 @@ function segRegionId(v) {
   return null;
 }
 // Analiza la matriz leída. regionPermitida: id de región (jefe URS) o null (gabinete: todas)
-function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigosCD = new Set(), codigosRetirados = new Set() }) {
+function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigosCD = new Set(), codigosRetirados = new Set(), codigosSoloRes = new Set() }) {
   let hi = -1, col = {};
   for (let i = 0; i < Math.min(matriz.length, 40) && hi < 0; i++) {
     const celdas = matriz[i].map(segNorm);
@@ -1797,7 +1797,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
   }
   if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
   const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
-  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, reintegrar: [], cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, reintegrar: [], promover: [], cdSoloRes: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
   const recs = [], rechazos = [], vistos = new Set();
   for (let i = hi + 1; i < matriz.length; i++) {
     const r = matriz[i];
@@ -1809,23 +1809,24 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     const enCD = codigosCD.has(codigo), estNorm = segNorm(get("estado", r)), esCat = estNorm === "100% girado" && (segNorm(nombre).includes("catastrofe") || (col.clasif != null && segNorm(get("clasif", r)).includes("catastrofe")));
     // Excepción 3: los «100% Girado» aprobados en 2026 (columna Fecha Aprobación) entran también
     const esG26 = estNorm === "100% girado" && col.faprob != null && /(^|\/|-)2026(\D|$)/.test(get("faprob", r).slice(-10)) ;
-    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || (enCD && estNorm === "100% girado") || esCat || esG26)) { st.fueraAlcance++; continue; }
+    const soloRes = enCD && col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || estNorm === "100% girado"); // Chile Despega aún sin aprobar: entra solo para el resumen de gabinete
+    if (col.estado != null && !(SEG_ESTADOS_ALCANCE.includes(estNorm) || enCD || esCat || esG26)) { st.fueraAlcance++; continue; }
     const rid = segRegionId(get("region", r));
     const rech = (motivo) => rechazos.push({ fila, codigo, nombre, motivo });
     if (!rid) { rech("región no reconocida"); continue; }
     if (regionPermitida && rid !== regionPermitida) { st.otraRegion++; continue; }
     if (!codigo) { rech("sin código (agrégalo a mano para evitar duplicados)"); continue; }
-    if (codigosExistentes.has(codigo)) { if (codigosRetirados.has(codigo)) st.reintegrar.push(codigo); else st.yaExistian++; continue; }
+    if (codigosExistentes.has(codigo)) { if (codigosRetirados.has(codigo)) st.reintegrar.push(codigo); else if (codigosSoloRes.has(codigo) && !soloRes) st.promover.push({ codigo, estado: get("estado", r), fecha: col.faprob != null ? segFechaISO(get("faprob", r)) : null }); else st.yaExistian++; continue; }
     if (vistos.has(codigo)) { rech("código repetido dentro del archivo"); continue; }
     const comuna = segTitulo(get("comuna", r)), programa = get("programa", r);
     if (!comuna || !nombre || !programa) { rech("faltan datos (comuna, programa o nombre)"); continue; }
     vistos.add(codigo);
-    if (enCD) { st.cdNuevos++; if (estNorm === "100% girado") st.cdGirado++; }
+    if (enCD) { st.cdNuevos++; if (estNorm === "100% girado") st.cdGirado++; if (soloRes) st.cdSoloRes++; }
     if (esCat && !enCD) st.catGirado++;
     else if (esG26 && !enCD) st.g26++;
     const monto = parseInt(get("monto", r).replace(/[^\d]/g, ""), 10);
     const anio = parseInt(get("anio", r), 10);
-    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, origen: "excel", creado_por: autor });
+    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, solo_resumen: soloRes, fecha_aprobacion: col.faprob != null ? segFechaISO(get("faprob", r)) : null, origen: "excel", creado_por: autor });
   }
   return { stats: st, recs, rechazos };
 }
@@ -2042,6 +2043,17 @@ function HojaRetiro({ ctx, it }) {
 
 // ---------- Limpieza masiva con el «Resumen financiero» de SUBDERE en línea ----------
 const SEG_CORTE_2026 = "2026-03-11";
+// Grupo de aprobación: primero la fecha de aprobación; si falta, la ronda de asignación (hoja «Asignaciones 2026»)
+function segGrupoAprob(p) {
+  if (p.fecha_aprobacion) return String(p.fecha_aprobacion).slice(0, 10) >= SEG_CORTE_2026 ? "post" : "pre";
+  const r = segNorm(p.ronda_asignacion || "");
+  if (!r || r === "eliminado") return "nd";
+  return r.startsWith("anterior") ? "pre" : "post";
+}
+function segGrupoTransf(p) {
+  if (p.transf_ano_actual == null) return "nd";
+  return Number(p.transf_ano_actual) > 0 ? "con" : "sin";
+}
 const SEG_MOTIVO_LIMPIEZA = "Limpieza masiva: aprobado antes del 11-03-2026, sin transferencia este año y 100% transferido";
 function segFechaISO(v) {
   if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() + 12 * 3600 * 1000).toISOString().slice(0, 10);
@@ -2101,6 +2113,17 @@ function HojaLimpieza({ ctx }) {
     const [res, setRes] = useState(null);
     const [sel, setSel] = useState(new Set());
     const [nHecho, setNHecho] = useState(0);
+    const [guardarFin, setGuardarFin] = useState(true);
+    async function guardarDatosFin(fin) {
+      let i = 0;
+      const worker = async () => { while (i < fin.length) { const x = fin[i++]; await fetcher.updateRow("seg_proyectos", x.id, x.patch); } };
+      await Promise.all(Array.from({ length: 6 }, worker));
+    }
+    async function soloGuardarFin() {
+      setFase("guardando"); setErr(""); setNHecho(0);
+      try { await guardarDatosFin(res.fin); recargar(); setNHecho(-1); setFase("listo"); }
+      catch (e) { setErr("No pude guardar los datos financieros: " + segMsgError(e)); setFase("revisar"); }
+    }
     async function leer(files) {
       if (!files || !files.length) return;
       setFase("leyendo"); setErr("");
@@ -2113,7 +2136,16 @@ function HojaLimpieza({ ctx }) {
         }
         if (sinFormato.length) throw new Error(`No reconozco el formato de: ${sinFormato.join(", ")}. Debe ser el «Resumen financiero» con las columnas Id proyecto, Fecha asignación, Transf. Año Actual y Monto Vigente.`);
         const conAvance = new Set(datos.an.filter(a => a.tipo === "avance" && !a.anulada).map(a => a.proyecto_id));
-        const activos = datos.pr.filter(p => p.activo && p.codigo);
+        const activos = datos.pr.filter(p => p.activo && p.codigo && !p.solo_resumen);
+        const fin = [];
+        for (const p of datos.pr) {
+          const e = p.codigo ? todo.get(p.codigo) : null; if (!e) continue;
+          const patch = {};
+          if (e.fecha && e.fecha !== String(p.fecha_aprobacion || "").slice(0, 10)) patch.fecha_aprobacion = e.fecha;
+          if (e.ta != null && Number(p.transf_ano_actual) !== e.ta) patch.transf_ano_actual = e.ta;
+          if (e.saldo != null && Number(p.saldo_por_transferir) !== e.saldo) patch.saldo_por_transferir = e.saldo;
+          if (Object.keys(patch).length) fin.push({ id: p.id, patch });
+        }
         const reg = new Set(activos.filter(p => todo.has(p.codigo)).map(p => p.region_id));
         const cands = [], cons = { n: 0 }, noEval = [];
         let sinDato = 0;
@@ -2130,7 +2162,7 @@ function HojaLimpieza({ ctx }) {
           } else cons.n++;
         }
         cands.sort((a, b) => SEG_ORDEN.indexOf(a.p.region_id) - SEG_ORDEN.indexOf(b.p.region_id) || a.p.comuna.localeCompare(b.p.comuna, "es") || a.p.nombre.localeCompare(b.p.nombre, "es"));
-        setRes({ cands, conservan: cons.n, noEval, sinDato, regiones: [...reg], nArchivos: files.length, nCodigos: todo.size });
+        setRes({ cands, fin, conservan: cons.n, noEval, sinDato, regiones: [...reg], nArchivos: files.length, nCodigos: todo.size });
         setSel(new Set(cands.filter(c => c.alertas.length === 0).map(c => c.p.id)));
         setFase("revisar");
       } catch (e) { setErr("No pude leer el archivo: " + (e.message || e)); setFase("elegir"); }
@@ -2148,6 +2180,7 @@ function HojaLimpieza({ ctx }) {
           await fetcher.updateWhere("seg_proyectos", `id=in.(${lote.join(",")})`, { activo: false });
           n += lote.length; setNHecho(n);
         }
+        if (guardarFin && res.fin.length) await guardarDatosFin(res.fin);
         recargar(); setFase("listo");
       } catch (e) { setErr(`Se retiraron ${n} proyectos y luego falló: ${segMsgError(e)}. Vuelve a cargar el archivo: los ya retirados no aparecerán de nuevo.`); recargar(); setFase("revisar"); }
     }
@@ -2188,13 +2221,19 @@ function HojaLimpieza({ ctx }) {
             ))}
           </tbody></table></div>
           {res.cands.length > MAX && <p className="meta">Se muestran los primeros {MAX} de {res.cands.length}. Los botones de marcar y desmarcar afectan a todos.</p>}
+          {res.fin.length > 0 && <label style={{ display: "flex", gap: 8, alignItems: "flex-start", margin: "10px 0" }}><input type="checkbox" checked={guardarFin} onChange={e => setGuardarFin(e.target.checked)} style={{ marginTop: 5 }} /><span>Guardar también la fecha de aprobación y lo transferido este año de {res.fin.length} proyectos (alimenta los filtros del resumen de gabinete).</span></label>}
           {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
           <div className="actions" style={{ marginTop: 12 }}>
             <button type="button" className="btn main" disabled={fase === "guardando" || sel.size === 0} onClick={retirar}>{fase === "guardando" ? `Retirando… ${nHecho} de ${sel.size}` : `Retirar ${sel.size} proyectos del seguimiento`}</button>
+            {res.fin.length > 0 && <button type="button" className="btn" disabled={fase === "guardando"} onClick={soloGuardarFin}>Solo guardar datos financieros (sin retirar)</button>}
             <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
           </div>
         </>}
-        {fase === "listo" && <>
+        {fase === "listo" && nHecho === -1 && <>
+          <p><b>Listo: se guardaron los datos financieros.</b> No se retiró ningún proyecto.</p>
+          <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
+        </>}
+        {fase === "listo" && nHecho !== -1 && <>
           <p><b>Listo: se retiraron {nHecho} proyectos del seguimiento.</b> Quedan en «Retirados» con el motivo anotado.</p>
           <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
         </>}
@@ -2297,10 +2336,12 @@ function HojaCarga({ ctx }) {
       try {
         const matriz = await segLeerMatriz(file);
         const codigosCD = new Set(esGab ? cdTxt.split(/[\n\r\t;]+/).map(x => x.trim()).filter(Boolean) : []);
-        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), codigosRetirados: new Set(datos.pr.filter(p => !p.activo && p.codigo).map(p => p.codigo)), autor, codigosCD });
+        const r = segAnalizar(matriz, { regionPermitida: esGab ? null : as, codigosExistentes: new Set(datos.pr.map(p => p.codigo).filter(Boolean)), codigosRetirados: new Set(datos.pr.filter(p => !p.activo && p.codigo).map(p => p.codigo)), codigosSoloRes: new Set(datos.pr.filter(p => p.solo_resumen && p.codigo).map(p => p.codigo)), autor, codigosCD });
+        if (r.error) { setErr(r.error); setFase("elegir"); return; }
         const idRet = new Map(datos.pr.filter(p => !p.activo && p.codigo).map(p => [p.codigo, p.id]));
         r.reintegrar = r.stats.reintegrar.map(c => idRet.get(c)).filter(Boolean);
-        if (r.error) { setErr(r.error); setFase("elegir"); return; }
+        const idSR = new Map(datos.pr.filter(p => p.solo_resumen && p.codigo).map(p => [p.codigo, p.id]));
+        r.promover = r.stats.promover.map(x => ({ ...x, id: idSR.get(x.codigo) })).filter(x => x.id);
         r.marcar = datos.pr.filter(p => p.codigo && codigosCD.has(p.codigo) && !p.chile_despega).map(p => p.id); // ya cargados que se marcarán Chile Despega
         r.nCD = codigosCD.size;
         setRes(r); setFase("resumen");
@@ -2321,6 +2362,7 @@ function HojaCarga({ ctx }) {
           await fetcher.insertMany("seg_anotaciones", lote.map(id => ({ proyecto_id: id, tipo: "reintegro", etapa: null, fecha: segHoy(), nota: "Reintegrado al volver a cargarlo desde Excel", autor, perfil: esGab ? "gabinete" : as })));
           await fetcher.updateWhere("seg_proyectos", `id=in.(${lote.join(",")})`, { activo: true });
         }
+        for (const x of (res.promover || [])) await fetcher.updateRow("seg_proyectos", x.id, { solo_resumen: false, estado_subdere: x.estado || null, ...(x.fecha ? { fecha_aprobacion: x.fecha } : {}) });
         for (let i = 0; i < (res.marcar || []).length; i += 150) await fetcher.updateWhere("seg_proyectos", `id=in.(${res.marcar.slice(i, i + 150).join(",")})`, { chile_despega: true });
         recargar(); setFase("listo");
       } catch (e) { setErr(`Se guardaron ${nGuardados} proyectos y luego falló: ${segMsgError(e)}. Vuelve a cargar el mismo archivo: los ya guardados se omiten.`); recargar(); setFase("resumen"); }
@@ -2333,7 +2375,7 @@ function HojaCarga({ ctx }) {
           <p className="meta">Sirve el listado de SUBDERE en línea (.xls), un .xlsx o un .csv. {esGab ? "Se aceptan todas las regiones." : `Solo se aceptan proyectos de la región de ${labelReg(as)}.`} Solo entran proyectos desde Aprobado en adelante; los códigos que ya existen se omiten.</p>
           {esGab && <div className="fld"><label htmlFor="seg-cdl">Lista Chile Despega (opcional)</label>
             <textarea id="seg-cdl" style={{ minHeight: 90 }} value={cdTxt} onChange={e => setCdTxt(e.target.value)} placeholder="Pega aquí los códigos Chile Despega, uno por línea" />
-            <p className="meta">Los proyectos de esta lista entran aunque estén en «100% Girado», quedan marcados como Chile Despega y los que ya estaban cargados también se marcan. Pega la lista ANTES de elegir el archivo.</p></div>}
+            <p className="meta">Los proyectos de esta lista entran aunque estén en «100% Girado» o aún sin aprobar (estos últimos solo se ven en el resumen de gabinete y las URS no los ven), quedan marcados como Chile Despega y los que ya estaban cargados también se marcan. Pega la lista ANTES de elegir el archivo.</p></div>}
           <div className="fld"><label htmlFor="seg-file">Archivo</label><input type="file" id="seg-file" accept=".xls,.xlsx,.csv,.txt" onChange={e => leer(e.target.files[0])} /></div>
         </>}
         {fase === "leyendo" && <p>Leyendo el archivo… puede tardar unos segundos.</p>}
@@ -2342,9 +2384,10 @@ function HojaCarga({ ctx }) {
             <div className="kpi"><b>{res.recs.length}</b><span>proyectos nuevos que entran</span></div>
             {(res.reintegrar || []).length > 0 && <div className="kpi"><b>{res.reintegrar.length}</b><span>estaban retirados y se reintegran</span></div>}
             <div className="kpi"><b>{st.yaExistian}</b><span>ya estaban en el panel (se omiten)</span></div>
+            {(res.promover || []).length > 0 && <div className="kpi"><b>{res.promover.length}</b><span>estaban «por aprobar» y ya se aprobaron: pasan al seguimiento de las URS</span></div>}
             <div className="kpi"><b>{res.rechazos.length}</b><span>rechazados</span></div>
           </div>
-          {res.nCD > 0 && <p className="meta"><b>Chile Despega:</b> la lista trae {res.nCD} códigos. Entran {st.cdNuevos} nuevos (de ellos {st.cdGirado} en «100% Girado») y se marcan {res.marcar.length} que ya estaban cargados.</p>}
+          {res.nCD > 0 && <p className="meta"><b>Chile Despega:</b> la lista trae {res.nCD} códigos. Entran {st.cdNuevos} nuevos (de ellos {st.cdGirado} en «100% Girado» y {st.cdSoloRes} aún sin aprobar, que solo se ven en el resumen de gabinete) y se marcan {res.marcar.length} que ya estaban cargados.</p>}
           {st.catGirado > 0 && <p className="meta"><b>Catástrofe:</b> entran {st.catGirado} proyectos nuevos de catástrofe que están en «100% Girado» (se incluyen aunque ese estado normalmente queda fuera).</p>}
           {st.g26 > 0 && <p className="meta"><b>100% Girado aprobados en 2026:</b> entran {st.g26} proyectos nuevos (se incluyen aunque ese estado normalmente queda fuera).</p>}
           <p className="meta">Filas leídas: {st.leidas}. Fuera de alcance (estado distinto de Aprobado, Con Anticipo Solicitado, Con Giro por Anticipo, En Ejecución o En Proceso de Cierre): {st.fueraAlcance}.{!esGab && ` De otra región (se ignoran): ${st.otraRegion}.`}{st.sinEstado && " ATENCIÓN: el archivo no trae columna «Estado», no se pudo filtrar por alcance."}</p>
@@ -2357,7 +2400,7 @@ function HojaCarga({ ctx }) {
           </>}
           {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
           <div className="actions" style={{ marginTop: 12 }}>
-            {(res.recs.length > 0 || res.marcar.length > 0 || (res.reintegrar || []).length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : (res.recs.length > 0 ? `Guardar ${res.recs.length} proyectos` + ((res.reintegrar || []).length > 0 ? ` y reintegrar ${res.reintegrar.length}` : "") : ((res.reintegrar || []).length > 0 ? `Reintegrar ${res.reintegrar.length} proyectos retirados` : `Marcar ${res.marcar.length} como Chile Despega`))}</button>}
+            {(res.recs.length > 0 || res.marcar.length > 0 || (res.reintegrar || []).length > 0 || (res.promover || []).length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : (res.recs.length > 0 ? `Guardar ${res.recs.length} proyectos` + ((res.reintegrar || []).length > 0 ? ` y reintegrar ${res.reintegrar.length}` : "") : ((res.reintegrar || []).length > 0 ? `Reintegrar ${res.reintegrar.length} proyectos retirados` : ((res.promover || []).length > 0 ? `Actualizar ${res.promover.length} proyectos que ya fueron aprobados` : `Marcar ${res.marcar.length} como Chile Despega`)))}</button>}
             <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
           </div>
         </>}
@@ -2778,6 +2821,9 @@ function SeguimientoInner() {
   const [lim, setLim] = useState(25);
   const [hoja, setHoja] = useState(null);
   const [soloCD, setSoloCD] = useState(false);
+  const [cdTodos, setCdTodos] = useState(false); // Chile Despega: asignados y por asignar (incluye «por aprobar»)
+  const [fAprob, setFAprob] = useState("todas"); // todas | post | pre | nd
+  const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
   const [cdRegion, setCdRegion] = useState(null); // región abierta dentro de «Proyectos por etapa»
   const [toast, setToast] = useState(null); // { msg, undo }
   const toastTimer = React.useRef(null);
@@ -2805,7 +2851,7 @@ function SeguimientoInner() {
   const nombreJefe = (id) => (regs[id] && regs[id].jefe_urs) || null;
   const quien = (a) => (a === "gab" ? "Gabinete" : (nombreJefe(a) ? `${nombreJefe(a)} (${labelReg(a)})` : `Jefe/a URS · Región de ${labelReg(a)}`));
 
-  const items = useMemo(() => {
+  const itemsAll = useMemo(() => {
     if (!datos) return [];
     const por = {};
     for (const a of datos.an) (por[a.proyecto_id] = por[a.proyecto_id] || []).push(a);
@@ -2823,6 +2869,9 @@ function SeguimientoInner() {
       return { p, hist, cur, est, retiro, activo: p.activo !== false, lic, con, ep, det: segResumenDetalle(p, lic, con, ep) };
     });
   }, [datos]);
+  // Los proyectos «solo resumen» (Chile Despega aún sin aprobar) no existen para las URS: solo suman en el resumen de gabinete
+  const items = useMemo(() => itemsAll.filter(x => !x.p.solo_resumen), [itemsAll]);
+  const itemsSR = useMemo(() => itemsAll.filter(x => x.p.solo_resumen && x.activo), [itemsAll]);
 
   if (!creds) return <ConnectScreen onConnect={(url, key) => setCreds({ url, key })} />;
   if (error && !datos) return (
@@ -2926,10 +2975,18 @@ function SeguimientoInner() {
     SEG_ORDEN.forEach(id => ["t", "sin", "vie", "ok"].forEach(k => { T[k] += por[id][k]; }));
     // La tabla «por etapa» puede filtrarse a Chile Despega; los números de arriba no
     const porT = {};
-    SEG_ORDEN.forEach(id => { porT[id] = { t: 0, sin: 0, et: {} }; });
-    for (const x of activos) { if (soloCD && !x.p.chile_despega) continue; const b = porT[x.p.region_id]; if (!b) continue; b.t++; if (x.est === "sin") b.sin++; if (x.cur) b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; }
-    const TT = { t: 0, sin: 0 };
-    SEG_ORDEN.forEach(id => { TT.t += porT[id].t; TT.sin += porT[id].sin; });
+    SEG_ORDEN.forEach(id => { porT[id] = { t: 0, sin: 0, pa: 0, et: {} }; });
+    const baseT = cdTodos && esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : activos.filter(x => !soloCD || x.p.chile_despega);
+    const okAp = (x, ap) => ap === "todas" || segGrupoAprob(x.p) === ap;
+    const okTr = (x, tr) => tr === "todas" || segGrupoTransf(x.p) === tr;
+    const tablaItems = baseT.filter(x => okAp(x, fAprob) && okTr(x, fTransf));
+    const cuenta = (fn) => baseT.filter(fn).length;
+    for (const x of tablaItems) { const b = porT[x.p.region_id]; if (!b) continue; b.t++; if (x.p.solo_resumen) { b.pa++; continue; } if (x.est === "sin") b.sin++; if (x.cur) b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; }
+    const TT = { t: 0, sin: 0, pa: 0 };
+    SEG_ORDEN.forEach(id => { TT.t += porT[id].t; TT.sin += porT[id].sin; TT.pa += porT[id].pa; });
+    const hayFiltro = fAprob !== "todas" || fTransf !== "todas";
+    const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "con transferencia este año" : fTransf === "sin" ? "sin transferencia este año" : fTransf === "nd" ? "sin dato de transferencia" : null].filter(Boolean).join(" · ");
+    const nSR = itemsSR.filter(x => x.p.chile_despega).length;
     return (
       <>
         <div className="kpis">
@@ -2955,34 +3012,52 @@ function SeguimientoInner() {
               <b>{pc}%</b>
             </div>); })}
         </div>
-        <h2>Proyectos por etapa de seguimiento{soloCD ? " · solo Chile Despega" : ""}</h2>
+        <h2>Proyectos por etapa de seguimiento{cdTodos && esGab ? " · Chile Despega (todos)" : soloCD ? " · solo Chile Despega" : ""}</h2>
         <div className="chips" role="group" aria-label="Proyectos por etapa">
-          <button type="button" className="chip" aria-pressed={!soloCD} onClick={() => { setSoloCD(false); setCdRegion(null); }}>Todos los proyectos</button>
-          <button type="button" className="chip" aria-pressed={soloCD} onClick={() => { setSoloCD(true); setCdRegion(null); }}>Proyectos Chile Despega ({nCD})</button>
+          <button type="button" className="chip" aria-pressed={!soloCD && !cdTodos} onClick={() => { setSoloCD(false); setCdTodos(false); setCdRegion(null); }}>Todos los proyectos</button>
+          <button type="button" className="chip" aria-pressed={soloCD && !cdTodos} onClick={() => { setSoloCD(true); setCdTodos(false); setCdRegion(null); }}>Proyectos Chile Despega ({nCD})</button>
+          {esGab && <button type="button" className="chip" aria-pressed={cdTodos} onClick={() => { setSoloCD(true); setCdTodos(true); setCdRegion(null); }}>Chile Despega: todos los asignados y por asignar ({nCD + nSR})</button>}
           {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>}
         </div>
+        {esGab && <>
+          <div className="chips" role="group" aria-label="Filtrar por aprobación">
+            <b style={{ alignSelf: "center" }}>Aprobación:</b>
+            <button type="button" className="chip" aria-pressed={fAprob === "todas"} onClick={() => { setFAprob("todas"); setCdRegion(null); }}>Todas</button>
+            <button type="button" className="chip" aria-pressed={fAprob === "post"} onClick={() => { setFAprob("post"); setCdRegion(null); }}>Desde el 11-03-2026 ({cuenta(x => okTr(x, fTransf) && segGrupoAprob(x.p) === "post")})</button>
+            <button type="button" className="chip" aria-pressed={fAprob === "pre"} onClick={() => { setFAprob("pre"); setCdRegion(null); }}>Antes del 11-03-2026 ({cuenta(x => okTr(x, fTransf) && segGrupoAprob(x.p) === "pre")})</button>
+            <button type="button" className="chip" aria-pressed={fAprob === "nd"} onClick={() => { setFAprob("nd"); setCdRegion(null); }}>Sin fecha ni ronda ({cuenta(x => okTr(x, fTransf) && segGrupoAprob(x.p) === "nd")})</button>
+          </div>
+          <div className="chips" role="group" aria-label="Filtrar por transferencia este año">
+            <b style={{ alignSelf: "center" }}>Transferencia este año:</b>
+            <button type="button" className="chip" aria-pressed={fTransf === "todas"} onClick={() => { setFTransf("todas"); setCdRegion(null); }}>Todas</button>
+            <button type="button" className="chip" aria-pressed={fTransf === "con"} onClick={() => { setFTransf("con"); setCdRegion(null); }}>Con transferencia ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "con")})</button>
+            <button type="button" className="chip" aria-pressed={fTransf === "sin"} onClick={() => { setFTransf("sin"); setCdRegion(null); }}>Sin transferencia ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "sin")})</button>
+            <button type="button" className="chip" aria-pressed={fTransf === "nd"} onClick={() => { setFTransf("nd"); setCdRegion(null); }}>Sin dato ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "nd")})</button>
+          </div>
+          <p className="meta">Aprobación: según la fecha de aprobación del listado; si falta, según la ronda de asignación de «Asignaciones 2026» («Anterior al 11mar2026» = antes). Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones; «Sin dato» = aún no cargado (se carga con «Limpiar con Resumen financiero»).{hayFiltro && <> <b>Mostrando: {descFiltro}.</b></>}</p>
+        </>}
         {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
         <p className="meta">Toca una región de la tabla para ver aquí el listado de sus proyectos{soloCD ? " Chile Despega" : ""}, por comuna.</p>
         <div className="tw"><table>
-          <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
+          <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{cdTodos && esGab && <th>Por aprobar</th>}{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
           <tbody>
             {SEG_ORDEN.map(id => { const b = porT[id]; return (
               <tr key={id} data-drill="1" aria-selected={cdRegion === id} style={cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
                 onClick={() => { setCdRegion(cdRegion === id ? null : id); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>
-                <td><button type="button">{labelReg(id)}</button></td><td>{b.t}</td><td>{b.sin}</td>{SEG_ETAPAS.map(e => <td key={e.id}>{b.et[e.id] || 0}</td>)}
+                <td><button type="button">{labelReg(id)}</button></td><td>{b.t}</td><td>{b.sin}</td>{cdTodos && esGab && <td>{b.pa}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{b.et[e.id] || 0}</td>)}
               </tr>); })}
-            <tr><td><b>Total</b></td><td><b>{TT.t}</b></td><td><b>{TT.sin}</b></td>{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (porT[id].et[e.id] || 0), 0)}</b></td>)}</tr>
+            <tr><td><b>Total</b></td><td><b>{TT.t}</b></td><td><b>{TT.sin}</b></td>{cdTodos && esGab && <td><b>{TT.pa}</b></td>}{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (porT[id].et[e.id] || 0), 0)}</b></td>)}</tr>
           </tbody>
         </table></div>
         {cdRegion && (() => {
-          const lista = activos.filter(x => x.p.region_id === cdRegion && (!soloCD || x.p.chile_despega))
+          const lista = tablaItems.filter(x => x.p.region_id === cdRegion)
             .sort((a, b) => a.p.comuna.localeCompare(b.p.comuna, "es") || a.p.nombre.localeCompare(b.p.nombre, "es"));
           const porComuna = [];
           for (const x of lista) { const g = porComuna[porComuna.length - 1]; if (g && g.comuna === x.p.comuna) g.items.push(x); else porComuna.push({ comuna: x.p.comuna, items: [x] }); }
           const total = lista.reduce((a, x) => a + (Number(x.p.monto_subdere) || 0), 0);
           return (
             <div id="seg-cd-lista" style={{ marginTop: 16 }}>
-              <h2>{soloCD ? "Proyectos Chile Despega" : "Proyectos"} · Región de {labelReg(cdRegion)} ({lista.length})</h2>
+              <h2>{soloCD ? (cdTodos ? "Proyectos Chile Despega (todos)" : "Proyectos Chile Despega") : "Proyectos"}{hayFiltro ? " · " + descFiltro : ""} · Región de {labelReg(cdRegion)} ({lista.length})</h2>
               {lista.length === 0 ? <div className="empty">Esta región no tiene proyectos{soloCD ? " Chile Despega" : ""}.</div> : (
                 <div className="tw"><table className="tcom">
                   <thead><tr><th>Comuna</th><th>Proyecto</th><th>Programa</th><th>Monto SUBDERE</th><th>Código</th><th>Etapa</th></tr></thead>
@@ -2997,7 +3072,7 @@ function SeguimientoInner() {
                             <td>{x.p.programa}{SEG_LINEA[x.p.programa] && <> <span className="tag">{SEG_LINEA[x.p.programa]}</span></>}</td>
                             <td>{x.p.monto_subdere ? "$" + Number(x.p.monto_subdere).toLocaleString("es-CL") : "—"}</td>
                             <td>{x.p.codigo || "—"}</td>
-                            <td>{x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar"}</td>
+                            <td>{x.p.solo_resumen ? `Por aprobar (${x.p.estado_subdere || "sin estado"})` : (x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar")}</td>
                           </tr>
                         ))}
                       </React.Fragment>

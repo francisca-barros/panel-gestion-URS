@@ -2824,6 +2824,7 @@ function SeguimientoInner() {
   const [cdTodos, setCdTodos] = useState(false); // Chile Despega: asignados y por asignar (incluye «por aprobar»)
   const [fAprob, setFAprob] = useState("todas"); // todas | post | pre | nd
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
+  const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
   const [verMonto, setVerMonto] = useState(false); // tabla por etapa: cantidad de proyectos o monto SUBDERE
   const [cdRegion, setCdRegion] = useState(null); // región abierta dentro de «Proyectos por etapa»
   const [toast, setToast] = useState(null); // { msg, undo }
@@ -2980,7 +2981,13 @@ function SeguimientoInner() {
     const baseT = cdTodos && esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : activos.filter(x => !soloCD || x.p.chile_despega);
     const okAp = (x, ap) => ap === "todas" || segGrupoAprob(x.p) === ap;
     const okTr = (x, tr) => tr === "todas" || segGrupoTransf(x.p) === tr;
-    const tablaItems = baseT.filter(x => okAp(x, fAprob) && okTr(x, fTransf));
+    const claveCom = (x) => x.p.region_id + "|" + x.p.comuna;
+    const antesCom = baseT.filter(x => okAp(x, fAprob) && okTr(x, fTransf));
+    const tablaItems = fCom ? antesCom.filter(x => claveCom(x) === fCom) : antesCom;
+    // comunas disponibles (con los filtros de aprobación y transferencia ya aplicados), agrupadas por región
+    const comunasPorReg = {};
+    for (const x of antesCom) { const m = (comunasPorReg[x.p.region_id] = comunasPorReg[x.p.region_id] || {}); m[x.p.comuna] = (m[x.p.comuna] || 0) + 1; }
+    const hayComuna = fCom && fCom.includes("|"); const nomCom = hayComuna ? fCom.slice(fCom.indexOf("|") + 1) : "";
     const monto = (x) => Number(x.p.monto_subdere) || 0;
     const mm = (n) => "$" + (n / 1e6).toLocaleString("es-CL", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M"; // millones de pesos
     const cuenta = (fn) => { const l = baseT.filter(fn); return `${l.length} · ${mm(l.reduce((a, x) => a + monto(x), 0))}`; };
@@ -3039,7 +3046,19 @@ function SeguimientoInner() {
             <button type="button" className="chip" aria-pressed={fTransf === "sin"} onClick={() => { setFTransf("sin"); setCdRegion(null); }}>Sin transferencia ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "sin")})</button>
             <button type="button" className="chip" aria-pressed={fTransf === "nd"} onClick={() => { setFTransf("nd"); setCdRegion(null); }}>Sin dato ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "nd")})</button>
           </div>
-          <p className="meta">Aprobación: según la fecha de aprobación del listado; si falta, según la ronda de asignación de «Asignaciones 2026» («Anterior al 11mar2026» = antes). Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones; «Sin dato» = aún no cargado (se carga con «Limpiar con Resumen financiero»).{hayFiltro && <> <b>Mostrando: {descFiltro}.</b></>} <b>Total mostrado: {TT.t} proyectos · {mm(TT.m)}.</b></p>
+          <div className="chips" role="group" aria-label="Filtrar por comuna">
+            <label htmlFor="seg-fcom" style={{ alignSelf: "center", fontWeight: 700 }}>Comuna:</label>
+            <select id="seg-fcom" value={fCom} onChange={e => { const v = e.target.value; setFCom(v); setCdRegion(v ? v.slice(0, v.indexOf("|")) : null); if (v) setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 120); }}>
+              <option value="">Todas las comunas</option>
+              {SEG_ORDEN.filter(id => comunasPorReg[id]).map(id => (
+                <optgroup key={id} label={"Región de " + labelReg(id)}>
+                  {Object.keys(comunasPorReg[id]).sort((a, b) => a.localeCompare(b, "es")).map(c => <option key={c} value={id + "|" + c}>{c} ({comunasPorReg[id][c]})</option>)}
+                </optgroup>
+              ))}
+            </select>
+            {fCom && <button type="button" className="btn sm" onClick={() => setFCom("")}>Quitar filtro de comuna</button>}
+          </div>
+          <p className="meta">Aprobación: según la fecha de aprobación del listado; si falta, según la ronda de asignación de «Asignaciones 2026» («Anterior al 11mar2026» = antes). Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones; «Sin dato» = aún no cargado (se carga con «Limpiar con Resumen financiero»).{(hayFiltro || hayComuna) && <> <b>Mostrando: {[descFiltro, hayComuna ? "comuna de " + nomCom : null].filter(Boolean).join(" · ")}.</b></>} <b>Total mostrado: {TT.t} proyectos · {mm(TT.m)}.</b></p>
         </>}
         {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
         <div className="chips" role="group" aria-label="Qué mostrar en la tabla">
@@ -3053,7 +3072,7 @@ function SeguimientoInner() {
           <tbody>
             {SEG_ORDEN.map(id => { const b = porT[id]; return (
               <tr key={id} data-drill="1" aria-selected={cdRegion === id} style={cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
-                onClick={() => { setCdRegion(cdRegion === id ? null : id); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>
+                onClick={() => { if (fCom && !fCom.startsWith(id + "|")) setFCom(""); setCdRegion(cdRegion === id ? null : id); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>
                 <td><button type="button">{labelReg(id)}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{vEt(b, e.id)}</td>)}
               </tr>); })}
             <tr><td><b>Total</b></td><td><b>{vTot(TT)}</b></td><td><b>{vSin(TT)}</b></td>{cdTodos && esGab && <td><b>{vPa(TT)}</b></td>}{SEG_ETAPAS.map(e => <td key={e.id}><b>{verMonto ? mm(totEt(e.id)) : totEt(e.id)}</b></td>)}</tr>
@@ -3065,9 +3084,30 @@ function SeguimientoInner() {
           const porComuna = [];
           for (const x of lista) { const g = porComuna[porComuna.length - 1]; if (g && g.comuna === x.p.comuna) g.items.push(x); else porComuna.push({ comuna: x.p.comuna, items: [x] }); }
           const total = lista.reduce((a, x) => a + (Number(x.p.monto_subdere) || 0), 0);
+          // situación por comuna de la región abierta (mismos filtros y misma vista de cantidad / monto)
+          const cr = {};
+          for (const x of antesCom.filter(y => y.p.region_id === cdRegion)) {
+            const b = (cr[x.p.comuna] = cr[x.p.comuna] || { t: 0, sin: 0, pa: 0, m: 0, mSin: 0, mPa: 0, et: {}, mEt: {} }); const m = monto(x);
+            b.t++; b.m += m; if (x.p.solo_resumen) { b.pa++; b.mPa += m; continue; }
+            if (x.est === "sin") { b.sin++; b.mSin += m; } if (x.cur) { b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; b.mEt[x.cur.etapa] = (b.mEt[x.cur.etapa] || 0) + m; }
+          }
+          const comRows = Object.keys(cr).sort((a, b) => a.localeCompare(b, "es"));
           return (
             <div id="seg-cd-lista" style={{ marginTop: 16 }}>
-              <h2>{soloCD ? (cdTodos ? "Proyectos Chile Despega (todos)" : "Proyectos Chile Despega") : "Proyectos"}{hayFiltro ? " · " + descFiltro : ""} · Región de {labelReg(cdRegion)} ({lista.length})</h2>
+              {comRows.length > 0 && <>
+                <h2>Situación por comuna · Región de {labelReg(cdRegion)}</h2>
+                <p className="meta">Toca una comuna para ver solo sus proyectos. {verMonto ? "Montos en millones de $." : "Cantidad de proyectos."}</p>
+                <div className="tw"><table id="seg-tabla-comunas">
+                  <thead><tr><th>Comuna</th><th>Total</th><th>Sin actualizar</th>{cdTodos && esGab && <th>Por aprobar</th>}{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
+                  <tbody>
+                    {comRows.map(c => { const b = cr[c]; return (
+                      <tr key={c} data-drill="1" aria-selected={fCom === cdRegion + "|" + c} onClick={() => setFCom(fCom === cdRegion + "|" + c ? "" : cdRegion + "|" + c)}>
+                        <td><button type="button">{c}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{vEt(b, e.id)}</td>)}
+                      </tr>); })}
+                  </tbody>
+                </table></div>
+              </>}
+              <h2>{soloCD ? (cdTodos ? "Proyectos Chile Despega (todos)" : "Proyectos Chile Despega") : "Proyectos"}{hayFiltro ? " · " + descFiltro : ""} · Región de {labelReg(cdRegion)}{hayComuna ? " · comuna de " + nomCom : ""} ({lista.length})</h2>
               {lista.length === 0 ? <div className="empty">Esta región no tiene proyectos{soloCD ? " Chile Despega" : ""}.</div> : (
                 <div className="tw"><table className="tcom">
                   <thead><tr><th>Comuna</th><th>Proyecto</th><th>Programa</th><th>Monto SUBDERE</th><th>Código</th><th>Etapa</th></tr></thead>

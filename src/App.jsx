@@ -2824,6 +2824,7 @@ function SeguimientoInner() {
   const [cdTodos, setCdTodos] = useState(false); // Chile Despega: asignados y por asignar (incluye «por aprobar»)
   const [fAprob, setFAprob] = useState("todas"); // todas | post | pre | nd
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
+  const [verMonto, setVerMonto] = useState(false); // tabla por etapa: cantidad de proyectos o monto SUBDERE
   const [cdRegion, setCdRegion] = useState(null); // región abierta dentro de «Proyectos por etapa»
   const [toast, setToast] = useState(null); // { msg, undo }
   const toastTimer = React.useRef(null);
@@ -2975,15 +2976,19 @@ function SeguimientoInner() {
     SEG_ORDEN.forEach(id => ["t", "sin", "vie", "ok"].forEach(k => { T[k] += por[id][k]; }));
     // La tabla «por etapa» puede filtrarse a Chile Despega; los números de arriba no
     const porT = {};
-    SEG_ORDEN.forEach(id => { porT[id] = { t: 0, sin: 0, pa: 0, et: {} }; });
+    SEG_ORDEN.forEach(id => { porT[id] = { t: 0, sin: 0, pa: 0, m: 0, mSin: 0, mPa: 0, mEt: {}, et: {} }; });
     const baseT = cdTodos && esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : activos.filter(x => !soloCD || x.p.chile_despega);
     const okAp = (x, ap) => ap === "todas" || segGrupoAprob(x.p) === ap;
     const okTr = (x, tr) => tr === "todas" || segGrupoTransf(x.p) === tr;
     const tablaItems = baseT.filter(x => okAp(x, fAprob) && okTr(x, fTransf));
-    const cuenta = (fn) => baseT.filter(fn).length;
-    for (const x of tablaItems) { const b = porT[x.p.region_id]; if (!b) continue; b.t++; if (x.p.solo_resumen) { b.pa++; continue; } if (x.est === "sin") b.sin++; if (x.cur) b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; }
-    const TT = { t: 0, sin: 0, pa: 0 };
-    SEG_ORDEN.forEach(id => { TT.t += porT[id].t; TT.sin += porT[id].sin; TT.pa += porT[id].pa; });
+    const monto = (x) => Number(x.p.monto_subdere) || 0;
+    const mm = (n) => "$" + (n / 1e6).toLocaleString("es-CL", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M"; // millones de pesos
+    const cuenta = (fn) => { const l = baseT.filter(fn); return `${l.length} · ${mm(l.reduce((a, x) => a + monto(x), 0))}`; };
+    for (const x of tablaItems) { const b = porT[x.p.region_id]; if (!b) continue; const m = monto(x); b.t++; b.m += m; if (x.p.solo_resumen) { b.pa++; b.mPa += m; continue; } if (x.est === "sin") { b.sin++; b.mSin += m; } if (x.cur) { b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; b.mEt[x.cur.etapa] = (b.mEt[x.cur.etapa] || 0) + m; } }
+    const TT = { t: 0, sin: 0, pa: 0, m: 0, mSin: 0, mPa: 0 };
+    SEG_ORDEN.forEach(id => { const b = porT[id]; TT.t += b.t; TT.sin += b.sin; TT.pa += b.pa; TT.m += b.m; TT.mSin += b.mSin; TT.mPa += b.mPa; });
+    const vTot = (b) => (verMonto ? mm(b.m) : b.t), vSin = (b) => (verMonto ? mm(b.mSin) : b.sin), vPa = (b) => (verMonto ? mm(b.mPa) : b.pa), vEt = (b, id) => (verMonto ? mm(b.mEt[id] || 0) : (b.et[id] || 0));
+    const totEt = (id) => SEG_ORDEN.reduce((a, r) => a + (verMonto ? (porT[r].mEt[id] || 0) : (porT[r].et[id] || 0)), 0);
     const hayFiltro = fAprob !== "todas" || fTransf !== "todas";
     const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "con transferencia este año" : fTransf === "sin" ? "sin transferencia este año" : fTransf === "nd" ? "sin dato de transferencia" : null].filter(Boolean).join(" · ");
     const nSR = itemsSR.filter(x => x.p.chile_despega).length;
@@ -3034,9 +3039,14 @@ function SeguimientoInner() {
             <button type="button" className="chip" aria-pressed={fTransf === "sin"} onClick={() => { setFTransf("sin"); setCdRegion(null); }}>Sin transferencia ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "sin")})</button>
             <button type="button" className="chip" aria-pressed={fTransf === "nd"} onClick={() => { setFTransf("nd"); setCdRegion(null); }}>Sin dato ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "nd")})</button>
           </div>
-          <p className="meta">Aprobación: según la fecha de aprobación del listado; si falta, según la ronda de asignación de «Asignaciones 2026» («Anterior al 11mar2026» = antes). Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones; «Sin dato» = aún no cargado (se carga con «Limpiar con Resumen financiero»).{hayFiltro && <> <b>Mostrando: {descFiltro}.</b></>}</p>
+          <p className="meta">Aprobación: según la fecha de aprobación del listado; si falta, según la ronda de asignación de «Asignaciones 2026» («Anterior al 11mar2026» = antes). Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones; «Sin dato» = aún no cargado (se carga con «Limpiar con Resumen financiero»).{hayFiltro && <> <b>Mostrando: {descFiltro}.</b></>} <b>Total mostrado: {TT.t} proyectos · {mm(TT.m)}.</b></p>
         </>}
         {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
+        <div className="chips" role="group" aria-label="Qué mostrar en la tabla">
+          <b style={{ alignSelf: "center" }}>Mostrar:</b>
+          <button type="button" className="chip" aria-pressed={!verMonto} onClick={() => setVerMonto(false)}>Cantidad de proyectos</button>
+          <button type="button" className="chip" aria-pressed={verMonto} onClick={() => setVerMonto(true)}>Monto SUBDERE (millones de $)</button>
+        </div>
         <p className="meta">Toca una región de la tabla para ver aquí el listado de sus proyectos{soloCD ? " Chile Despega" : ""}, por comuna.</p>
         <div className="tw"><table>
           <thead><tr><th>Región</th><th>Total</th><th>Sin actualizar</th>{cdTodos && esGab && <th>Por aprobar</th>}{SEG_ETAPAS.map(e => <th key={e.id}>{e.n}</th>)}</tr></thead>
@@ -3044,9 +3054,9 @@ function SeguimientoInner() {
             {SEG_ORDEN.map(id => { const b = porT[id]; return (
               <tr key={id} data-drill="1" aria-selected={cdRegion === id} style={cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
                 onClick={() => { setCdRegion(cdRegion === id ? null : id); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>
-                <td><button type="button">{labelReg(id)}</button></td><td>{b.t}</td><td>{b.sin}</td>{cdTodos && esGab && <td>{b.pa}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{b.et[e.id] || 0}</td>)}
+                <td><button type="button">{labelReg(id)}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{vEt(b, e.id)}</td>)}
               </tr>); })}
-            <tr><td><b>Total</b></td><td><b>{TT.t}</b></td><td><b>{TT.sin}</b></td>{cdTodos && esGab && <td><b>{TT.pa}</b></td>}{SEG_ETAPAS.map(e => <td key={e.id}><b>{SEG_ORDEN.reduce((a, id) => a + (porT[id].et[e.id] || 0), 0)}</b></td>)}</tr>
+            <tr><td><b>Total</b></td><td><b>{vTot(TT)}</b></td><td><b>{vSin(TT)}</b></td>{cdTodos && esGab && <td><b>{vPa(TT)}</b></td>}{SEG_ETAPAS.map(e => <td key={e.id}><b>{verMonto ? mm(totEt(e.id)) : totEt(e.id)}</b></td>)}</tr>
           </tbody>
         </table></div>
         {cdRegion && (() => {

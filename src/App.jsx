@@ -1841,7 +1841,7 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg *{box-sizing: border-box;}
 .seg{background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 1.5; padding-block: 12px 56px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));}
-.seg .wrap{max-width: 1100px; margin: 0 auto;}
+.seg .wrap{max-width: min(1800px, 96vw); margin: 0 auto;}
 .seg button, .seg select, .seg input, .seg textarea{font-family: inherit; font-size: inherit; color: inherit;}
 .seg :focus-visible{outline: 3px solid var(--secondary); outline-offset: 2px;}
 .seg h1{font-size: 24px; line-height: 1.2; margin: 0; color: var(--primary); text-wrap: balance;}
@@ -1862,7 +1862,8 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .btn.go{background: var(--ok); border-color: var(--ok); color: #FFFFFF;}
 .seg .btn.sm{min-height: 40px; padding: 6px 12px; font-size: 14px;}
 .seg .kpis.mini .kpi{padding: 8px 12px;} .seg .kpis.mini .kpi b{font-size: 22px;} .seg .kpis.mini .kpi span{font-size: 11px; line-height: 1.25;}
-.seg .sem td, .seg .sem th{text-align:center; padding:6px 8px;}
+.seg .sem{font-size: 14px; width: 100%;} .seg .sem td, .seg .sem th{text-align:center; padding:6px 6px;}
+@media (max-width: 1250px){.seg .sem{font-size: 12px;} .seg .sem td, .seg .sem th{padding: 4px 3px;} .seg .sem th{font-size: 11px; line-height: 1.2;} .seg .sem small{display: block;}}
 .seg .sem td.sem-n{text-align:left; font-weight:700;}
 .seg .sem .sem-e{background:#8fd9a8; color:#063d1c;} .seg .sem .sem-v{background:#c9efd5; color:#0b5a2a;} .seg .sem .sem-a{background:#fff0b3; color:#7a5b00;} .seg .sem .sem-r{background:#f9cdd0; color:#8a1520;}
 .seg .sem tr.sem-tot td{border-top:3px solid var(--primary); font-weight:800;}
@@ -2165,7 +2166,7 @@ function HojaLimpieza({ ctx }) {
           const e = p.codigo ? todo.get(p.codigo) : null; if (!e) continue;
           const patch = {};
           if (e.fecha && e.fecha !== String(p.fecha_aprobacion || "").slice(0, 10)) patch.fecha_aprobacion = e.fecha;
-          if (e.ta != null && Number(p.transf_ano_actual) !== e.ta) patch.transf_ano_actual = e.ta;
+          if (e.ta != null && Number(p.transf_ano_actual) !== e.ta && !(e.ta === 0 && Number(p.transf_ano_actual) > 0)) patch.transf_ano_actual = e.ta; // nunca pisar un monto transferido > 0 con un 0
           if (e.saldo != null && Number(p.saldo_por_transferir) !== e.saldo) patch.saldo_por_transferir = e.saldo;
           if (Object.keys(patch).length) fin.push({ id: p.id, patch });
         }
@@ -2850,6 +2851,7 @@ function SeguimientoInner() {
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
   const [fProg, setFProg] = useState(""); // filtro por programa del resumen
   const [prg, setPrg] = useState(""); // filtro por programa de la vista de región
+  const [semTanda, setSemTanda] = useState("todas"); // todas | 1 | 2
   const [verSem, setVerSem] = useState(false); // semáforo Chile Despega (solo gabinete)
   const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
   const [verMonto, setVerMonto] = useState(false); // tabla por etapa: cantidad de proyectos o monto SUBDERE
@@ -3038,7 +3040,10 @@ function SeguimientoInner() {
     const descTodo = [cdModo ? "Chile Despega: " + CD_ETQ[cdModo] : "todos los proyectos", descFiltro, hayComuna ? "comuna de " + nomCom : null].filter(Boolean).join(" · ");
     const nSR = itemsSR.filter(x => x.p.chile_despega).length;
     // Semáforo Chile Despega: se recalcula en vivo con lo que hay en el panel (todos los Chile Despega, incluidos los «por aprobar»)
-    const baseS = esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : [];
+    const tandaDe = (p) => { const r = segNorm(p.ronda_asignacion || ""); return r.includes("1era") ? "1" : r.includes("2da") ? "2" : "0"; };
+    const baseS0 = esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : [];
+    const nTanda = { "1": 0, "2": 0, "0": 0 }; baseS0.forEach(x => { nTanda[tandaDe(x.p)]++; });
+    const baseS = semTanda === "todas" ? baseS0 : baseS0.filter(x => tandaDe(x.p) === semTanda);
     const semR = {};
     SEG_ORDEN.forEach(id => { semR[id] = { id, n: 0, m: 0, lic: 0, adj: 0, ob: 0, pa: 0, sa: 0, tdat: 0, mtr: 0 }; });
     for (const x of baseS) {
@@ -3071,19 +3076,23 @@ function SeguimientoInner() {
           {retirados.length > 0 && <button type="button" className="btn sm" style={{ fontSize: 12, padding: "3px 10px", minHeight: 30 }} onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Retirados ({retirados.length})</button>}
         </div>
         {esGab && verSem && <div id="seg-semaforo" style={{ marginBottom: 22 }}>
-          <h2>Semáforo Chile Despega · avance por región</h2>
+          <h2>Semáforo Chile Despega · avance por región{semTanda === "1" ? " · 1ª tanda" : semTanda === "2" ? " · 2ª tanda" : ""}</h2>
+          <div className="chips" role="group" aria-label="Tanda" style={{ marginBottom: 8 }}>
+            {[["todas", "Ambas tandas"], ["1", "1ª tanda"], ["2", "2ª tanda"]].map(([k, l]) => <button key={k} type="button" className="chip" aria-pressed={semTanda === k} onClick={() => setSemTanda(k)}>{l}</button>)}
+          </div>
+          {semTanda === "todas" && nTanda["0"] > 0 && <p className="meta">{nTanda["0"]} proyecto{nTanda["0"] === 1 ? "" : "s"} Chile Despega sin tanda identificada (solo se cuentan en «Ambas tandas»).</p>}
           <p className="meta">Se calcula en vivo con lo que registran las URS (hoy {new Date().toLocaleDateString("es-CL")}, {new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}). Mide sobre todos los proyectos marcados Chile Despega, incluidos los «por aprobar», que cuentan sin avance. Puntaje = {Math.round(SEG_SEM_PESOS.lic * 100)}% licitado + {Math.round(SEG_SEM_PESOS.adj * 100)}% adjudicado + {Math.round(SEG_SEM_PESOS.ob * 100)}% obras iniciadas.</p>
           {semRows.length === 0 ? <div className="empty">Todavía no hay proyectos marcados como Chile Despega.</div> : (
             <div className="tw"><table className="sem">
-              <thead><tr><th>#</th><th style={{ textAlign: "left" }}>Región</th><th>Proyectos CD</th><th>Por aprobar</th><th>Monto SUBDERE</th><th>Licitado o más</th><th>Adjudicado o más</th><th>Obras iniciadas</th><th>Monto transferido</th><th>Puntaje</th><th>Actualización</th></tr></thead>
+              <thead><tr><th>#</th><th style={{ textAlign: "left" }}>Región</th><th title="Proyectos Chile Despega">Proy. CD</th><th title="Aún sin aprobación: cuentan sin avance">Por aprobar</th><th title="Monto SUBDERE">Monto</th><th title="Licitado o más avanzado">Licitado+</th><th title="Adjudicado o más avanzado">Adjudicado+</th><th title="Obras iniciadas">Obras</th><th title="Monto transferido este año">Transferido</th><th title="Puntaje ponderado">Puntaje</th><th title="Proyectos sin actualizar">Act.</th></tr></thead>
               <tbody>
                 {[...semRows.map((r, i) => ({ r, pos: i + 1 })), { r: semTot, pos: "", tot: true }].map(({ r, pos, tot }) => (
                   <tr key={tot ? "tot" : r.id} className={tot ? "sem-tot" : ""}>
                     <td>{pos}</td><td className="sem-n">{tot ? "TOTAL PAÍS" : labelReg(r.id)}</td><td>{r.n}</td><td>{r.pa}</td><td>{mm(r.m)}</td>
                     {[r.plic, r.padj, r.pob].map((v, k) => { const [c, ic] = segTramo(v); return <td key={k} className={"sem-" + c}><b>{ic} {Math.round(v)}%</b></td>; })}
-                    {(() => { const [c, ic] = segTramo(r.ptr); return <td className={"sem-" + c}><b>{ic} {Math.round(r.ptr)}%</b><br /><small>{mm(r.mtr)}{r.tdat < r.n ? ` · dato de ${r.tdat} de ${r.n}` : ""}</small></td>; })()}
+                    {(() => { const [c, ic] = segTramo(r.ptr); return <td className={"sem-" + c}><b>{ic} {Math.round(r.ptr)}%</b><br /><small>{mm(r.mtr)}{r.tdat < r.n ? ` (dato ${r.tdat}/${r.n})` : ""}</small></td>; })()}
                     <td className={"sem-" + segTramo(r.score)[0]}><b>{r.score.toFixed(1)}</b></td>
-                    <td>{r.sa > 0 ? <b style={{ color: "#8a1520" }}>⚠ {r.sa} sin actualizar</b> : "al día"}</td>
+                    <td>{r.sa > 0 ? <b style={{ color: "#8a1520" }} title={r.sa + " sin actualizar"}>⚠ {r.sa}</b> : "al día"}</td>
                   </tr>))}
               </tbody>
             </table></div>)}

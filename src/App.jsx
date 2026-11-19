@@ -1775,6 +1775,7 @@ const SEG_ALIAS = {
   anio: ["ano creacion", "anio creacion"],
   faprob: ["fecha aprobacion", "fecha de aprobacion"],
   clasif: ["clasif. especial", "clasif especial", "clasificacion especial"],
+  plan: ["plan"],
 };
 function segRegionId(v) {
   const s = segNorm(v);
@@ -1826,7 +1827,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     else if (esG26 && !enCD) st.g26++;
     const monto = parseInt(get("monto", r).replace(/[^\d]/g, ""), 10);
     const anio = parseInt(get("anio", r), 10);
-    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, solo_resumen: soloRes, fecha_aprobacion: col.faprob != null ? segFechaISO(get("faprob", r)) : null, origen: "excel", creado_por: autor });
+    recs.push({ codigo, region_id: rid, comuna, programa, nombre, monto_subdere: Number.isFinite(monto) ? monto : null, anio_creacion: Number.isFinite(anio) ? anio : null, estado_subdere: col.estado != null ? get("estado", r) : null, chile_despega: enCD, solo_resumen: soloRes, plan_listado: col.plan != null ? (get("plan", r) || null) : null, fecha_aprobacion: col.faprob != null ? segFechaISO(get("faprob", r)) : null, origen: "excel", creado_por: autor });
   }
   return { stats: st, recs, rechazos };
 }
@@ -1860,6 +1861,7 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .btn.main:hover{filter: brightness(1.12);}
 .seg .btn.go{background: var(--ok); border-color: var(--ok); color: #FFFFFF;}
 .seg .btn.sm{min-height: 40px; padding: 6px 12px; font-size: 14px;}
+.seg .kpis.mini .kpi{padding: 8px 12px;} .seg .kpis.mini .kpi b{font-size: 22px;} .seg .kpis.mini .kpi span{font-size: 11px; line-height: 1.25;}
 .seg .sem td, .seg .sem th{text-align:center; padding:6px 8px;}
 .seg .sem td.sem-n{text-align:left; font-weight:700;}
 .seg .sem .sem-e{background:#8fd9a8; color:#063d1c;} .seg .sem .sem-v{background:#c9efd5; color:#0b5a2a;} .seg .sem .sem-a{background:#fff0b3; color:#7a5b00;} .seg .sem .sem-r{background:#f9cdd0; color:#8a1520;}
@@ -2061,6 +2063,20 @@ function segGrupoTransf(p) {
 // Semáforo Chile Despega: puntaje ponderado y tramos de color (de 30% en 30%, último tramo desde 90%)
 const SEG_SEM_PESOS = { lic: 0.2, adj: 0.3, ob: 0.5 };
 function segTramo(v) { return v >= 90 ? ["e", "★"] : v >= 60 ? ["v", "✔"] : v >= 30 ? ["a", "▲"] : ["r", "✖"]; }
+// Grupos de programa para filtrar. PMU y PMB incluyen sus líneas (según definición de gabinete); IRAL cruza ambos (PMU Tradicional y PMB Tradicional)
+const SEG_GRUPOS_PROG = ["PMU", "PMB", "IRAL", "PTRAC", "FRC", "PREAVS", "PRBIPE", "Otros"];
+function segEsIRAL(p) { const pr = segNorm(p.programa || ""); return pr === "tradicional" || pr === "pmb tradicional" || pr.includes("iral"); }
+function segGrupoProg(p) { // grupo exclusivo (sin IRAL, que es transversal)
+  const pr = segNorm(p.programa || ""), plan = segNorm(p.plan_listado || "");
+  if (pr.includes("fondo recuperacion") || pr === "frc") return "FRC";
+  if (pr.includes("tenencia responsable") || pr === "ptrac") return "PTRAC";
+  if (plan === "preavs" || pr.includes("preavs")) return "PREAVS";
+  if (pr.includes("revitalizacion de barrios") || pr === "prbipe") return "PRBIPE";
+  if (pr.includes("mejoramiento de barrios") || pr.startsWith("pmb") || pr.includes("energizacion") || pr.includes("infraestructura rural") || pr.includes("puesta en valor") || pr.includes("residuos") || pr.includes("saneamiento")) return "PMB";
+  if (pr.startsWith("pmu") || pr === "tradicional" || pr.includes("emergencia") || pr.includes("infraestructura educacional") || pr.includes("transporte") || pr.includes("catastrofe") || pr.includes("turismo") || pr.includes("cuenca del carbon") || pr.includes("prevencion del delito")) return "PMU";
+  return "Otros";
+}
+const segCumpleProg = (p, g) => !g || (g === "IRAL" ? segEsIRAL(p) : segGrupoProg(p) === g);
 const SEG_MOTIVO_LIMPIEZA = "Limpieza masiva: aprobado antes del 11-03-2026, sin transferencia este año y 100% transferido";
 function segFechaISO(v) {
   if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() + 12 * 3600 * 1000).toISOString().slice(0, 10);
@@ -2832,6 +2848,8 @@ function SeguimientoInner() {
   const soloCD = cdModo !== null, cdTodos = cdModo === "todos";
   const [fAprob, setFAprob] = useState("todas"); // todas | post | pre | nd
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
+  const [fProg, setFProg] = useState(""); // filtro por programa del resumen
+  const [prg, setPrg] = useState(""); // filtro por programa de la vista de región
   const [verSem, setVerSem] = useState(false); // semáforo Chile Despega (solo gabinete)
   const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
   const [verMonto, setVerMonto] = useState(false); // tabla por etapa: cantidad de proyectos o monto SUBDERE
@@ -2895,7 +2913,7 @@ function SeguimientoInner() {
   const asValido = esGab || SEG_ORDEN.includes(as);
   const region = esGab ? drill : as;
 
-  const elegir = (a) => { try { localStorage.setItem("seg-as", a); } catch (e) { /* sin almacenamiento */ } setAs(a); setDrill(null); setLim(25); setFlt("all"); setQ(""); setCom(""); setEtp(""); window.scrollTo(0, 0); };
+  const elegir = (a) => { try { localStorage.setItem("seg-as", a); } catch (e) { /* sin almacenamiento */ } setAs(a); setDrill(null); setLim(25); setFlt("all"); setQ(""); setCom(""); setEtp(""); setPrg(""); window.scrollTo(0, 0); };
   const cambiar = () => { try { localStorage.removeItem("seg-as"); } catch (e) { /* ignorar */ } setAs(""); setDrill(null); setHoja(null); };
   const mostrarToast = (msg, undo) => { setToast({ msg, undo }); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 8000); };
   const recargar = () => setTick(t => t + 1);
@@ -2993,7 +3011,7 @@ function SeguimientoInner() {
     const okAp = (x, ap) => ap === "todas" || segGrupoAprob(x.p) === ap;
     const okTr = (x, tr) => tr === "todas" || segGrupoTransf(x.p) === tr;
     const claveCom = (x) => x.p.region_id + "|" + x.p.comuna;
-    const antesCom = baseT.filter(x => okAp(x, fAprob) && okTr(x, fTransf));
+    const antesCom = baseT.filter(x => okAp(x, fAprob) && okTr(x, fTransf) && segCumpleProg(x.p, fProg));
     const tablaItems = fCom ? antesCom.filter(x => claveCom(x) === fCom) : antesCom;
     // comunas disponibles (con los filtros de aprobación y transferencia ya aplicados), agrupadas por región
     const comunasPorReg = {};
@@ -3014,9 +3032,9 @@ function SeguimientoInner() {
     const transfTotal = conT.reduce((a, x) => a + (Number(x.p.transf_ano_actual) || 0), 0);
     const regsOrd = SEG_ORDEN.filter(id => porT[id].t > 0).sort((a, b) => porT[b].m - porT[a].m);
     const etapasRes = [...(TT.pa ? [`Por aprobar ${TT.pa} (${mm(TT.mPa)})`] : []), ...(TT.sin ? [`Sin actualizar ${TT.sin} (${mm(TT.mSin)})`] : []), ...SEG_ETAPAS.filter(e => totEtN(e.id) > 0).map(e => `${e.n} ${totEtN(e.id)} (${mm(totEtM(e.id))})`)];
-    const hayFiltro = fAprob !== "todas" || fTransf !== "todas";
+    const hayFiltro = fAprob !== "todas" || fTransf !== "todas" || !!fProg;
     const CD_ETQ = { todos: "todos (asignados y por asignar)", asignados: "ya asignados", transferidos: "ya transferidos" };
-    const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "transferidos este año" : fTransf === "sin" ? "no transferidos este año" : null].filter(Boolean).join(" · ");
+    const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "transferidos este año" : fTransf === "sin" ? "no transferidos este año" : null, fProg ? "programa " + fProg : null].filter(Boolean).join(" · ");
     const descTodo = [cdModo ? "Chile Despega: " + CD_ETQ[cdModo] : "todos los proyectos", descFiltro, hayComuna ? "comuna de " + nomCom : null].filter(Boolean).join(" · ");
     const nSR = itemsSR.filter(x => x.p.chile_despega).length;
     // Semáforo Chile Despega: se recalcula en vivo con lo que hay en el panel (todos los Chile Despega, incluidos los «por aprobar»)
@@ -3041,13 +3059,16 @@ function SeguimientoInner() {
           <div className="kpi"><b>{T.vie}</b><span>desactualizados (más de {SEG_DIAS_DESACTUALIZADO} días sin anotar)</span></div>
           <div className="kpi"><b>{T.sin}</b><span>sin actualizar (nunca anotados)</span></div>
         </div>
-        <div className="actions" style={{ marginBottom: 18 }}>
+        <div className="actions" style={{ marginBottom: 6 }}>
           <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>＋ Cargar desde Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>＋ Agregar a mano</button>
           <button type="button" className="btn" title="Descarga un Excel con los proyectos de todas las regiones" onClick={() => descargar(SEG_ORDEN, "proyectos_seguimiento_todas_las_regiones")}>⤓ Descargar Excel</button>
-          <button type="button" className="btn" onClick={() => setHoja({ tipo: "limpieza" })}>Limpiar con Resumen financiero</button>
-          {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Retirados ({retirados.length})</button>}
           {esGab && <button type="button" className="btn" aria-pressed={verSem} onClick={() => setVerSem(v => !v)}>{verSem ? "Ocultar semáforo" : "Semáforo Chile Despega"}</button>}
+        </div>
+        <div className="actions" style={{ marginBottom: 18, gap: 6 }}>
+          {esGab && <button type="button" className="btn sm" style={{ fontSize: 12, padding: "3px 10px", minHeight: 30 }} onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>}
+          <button type="button" className="btn sm" style={{ fontSize: 12, padding: "3px 10px", minHeight: 30 }} onClick={() => setHoja({ tipo: "limpieza" })}>Limpiar con Resumen financiero</button>
+          {retirados.length > 0 && <button type="button" className="btn sm" style={{ fontSize: 12, padding: "3px 10px", minHeight: 30 }} onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Retirados ({retirados.length})</button>}
         </div>
         {esGab && verSem && <div id="seg-semaforo" style={{ marginBottom: 22 }}>
           <h2>Semáforo Chile Despega · avance por región</h2>
@@ -3072,7 +3093,7 @@ function SeguimientoInner() {
         <p className="meta">Toca una región para ver sus proyectos.</p>
         <div className="bars">
           {SEG_ORDEN.map(id => { const b = por[id], pc = b.t ? Math.round(100 * b.ok / b.t) : 0; return (
-            <div key={id} className="bar" data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); setEtp(""); window.scrollTo(0, 0); }}>
+            <div key={id} className="bar" data-drill="1" onClick={() => { setDrill(id); setFlt("all"); setLim(25); setQ(""); setCom(""); setEtp(""); setPrg(""); window.scrollTo(0, 0); }}>
               <button type="button">{labelReg(id)} · {b.ok} de {b.t}</button>
               <div className="track" aria-hidden="true"><div className="fill" style={{ width: pc + "%" }} /></div>
               <b>{pc}%</b>
@@ -3089,7 +3110,6 @@ function SeguimientoInner() {
               ))}
             </div>}
           </span>
-          {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>}
         </div>
         {esGab && <>
           <div className="chips" role="group" aria-label="Filtrar por aprobación" style={{ alignItems: "center" }}>
@@ -3105,11 +3125,21 @@ function SeguimientoInner() {
             <button type="button" className="chip" aria-pressed={fTransf === "con"} onClick={() => { setFTransf("con"); setCdRegion(null); }}>Transferidos</button>
             <button type="button" className="chip" aria-pressed={fTransf === "sin"} onClick={() => { setFTransf("sin"); setCdRegion(null); }}>No transferidos</button>
           </div>
+          <div className="chips" role="group" aria-label="Filtrar por programa" style={{ alignItems: "center" }}>
+            <b>Programa:</b>
+            <button type="button" className="chip" aria-pressed={!fProg} onClick={() => { setFProg(""); setCdRegion(null); }}>Todos</button>
+            {SEG_GRUPOS_PROG.map(g => <button key={g} type="button" className="chip" aria-pressed={fProg === g} onClick={() => { setFProg(g); setCdRegion(null); }}>{g}</button>)}
+          </div>
           <div className="chips" role="group" aria-label="Filtrar por comuna">
+            <label htmlFor="seg-freg" style={{ alignSelf: "center", fontWeight: 700 }}>Región:</label>
+            <select id="seg-freg" value={cdRegion || ""} onChange={e => { const v = e.target.value; if (fCom && !fCom.startsWith(v + "|")) setFCom(""); setCdRegion(v || null); if (v) setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 120); }}>
+              <option value="">Todas las regiones</option>
+              {SEG_ORDEN.map(id => <option key={id} value={id}>{labelReg(id)}</option>)}
+            </select>
             <label htmlFor="seg-fcom" style={{ alignSelf: "center", fontWeight: 700 }}>Comuna:</label>
             <select id="seg-fcom" value={fCom} onChange={e => { const v = e.target.value; setFCom(v); setCdRegion(v ? v.slice(0, v.indexOf("|")) : null); if (v) setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 120); }}>
               <option value="">Todas las comunas</option>
-              {SEG_ORDEN.filter(id => comunasPorReg[id]).map(id => (
+              {SEG_ORDEN.filter(id => comunasPorReg[id] && (!cdRegion || id === cdRegion)).map(id => (
                 <optgroup key={id} label={"Región de " + labelReg(id)}>
                   {Object.keys(comunasPorReg[id]).sort((a, b) => a.localeCompare(b, "es")).map(c => <option key={c} value={id + "|" + c}>{c} ({comunasPorReg[id][c]})</option>)}
                 </optgroup>
@@ -3117,14 +3147,19 @@ function SeguimientoInner() {
             </select>
             {fCom && <button type="button" className="btn sm" onClick={() => setFCom("")}>Quitar filtro de comuna</button>}
           </div>
-          <div className="note" id="seg-res-ejec" aria-live="polite">
-            <p><b>Resumen ejecutivo</b> · {descTodo}</p>
-            <p><b>{TT.t} {TT.t === 1 ? "proyecto" : "proyectos"} · {mm(TT.m)}</b> de monto SUBDERE, en {regsOrd.length} {regsOrd.length === 1 ? "región" : "regiones"}.</p>
-            <p>Aprobación: desde el 11-03-2026 {gr(x => segGrupoAprob(x.p) === "post")} · antes {gr(x => segGrupoAprob(x.p) === "pre")} · sin fecha ni ronda {gr(x => segGrupoAprob(x.p) === "nd")}.</p>
-            <p>Transferencia este año: transferidos {gr(x => segGrupoTransf(x.p) === "con")}, con {mm(transfTotal)} transferidos en el año · no transferidos {gr(x => segGrupoTransf(x.p) === "sin")} · sin dato {gr(x => segGrupoTransf(x.p) === "nd")} (el «sin dato» no entra en ninguno de los dos botones).</p>
-            <p>Por etapa: {etapasRes.join(" · ") || "—"}.</p>
-            {regsOrd.length > 0 && <p>Mayores regiones por monto: {regsOrd.slice(0, 3).map(id => `${labelReg(id)} ${porT[id].t} (${mm(porT[id].m)})`).join(" · ")}.</p>}
+          <div className="kpis mini" id="seg-res-ejec" aria-live="polite">
+            <div className="kpi"><b>{TT.t}</b><span>proyectos</span></div>
+            <div className="kpi"><b>{mm(TT.m)}</b><span>monto SUBDERE</span></div>
+            <div className="kpi"><b>{tablaItems.filter(x => segGrupoAprob(x.p) === "post").length}</b><span>aprobados desde el 11-03-2026</span></div>
+            <div className="kpi"><b>{tablaItems.filter(x => segGrupoAprob(x.p) === "pre").length}</b><span>aprobados antes del 11-03-2026</span></div>
+            <div className="kpi"><b>{conT.length}</b><span>transferidos este año</span></div>
+            <div className="kpi"><b>{mm(transfTotal)}</b><span>monto transferido este año</span></div>
+            <div className="kpi"><b>{tablaItems.filter(x => segGrupoTransf(x.p) === "sin").length}</b><span>no transferidos</span></div>
+            <div className="kpi"><b>{tablaItems.filter(x => segGrupoTransf(x.p) === "nd").length}</b><span>sin dato de transferencia</span></div>
+            {TT.pa > 0 && <div className="kpi"><b>{TT.pa}</b><span>por aprobar (aún sin aprobación)</span></div>}
+            <div className="kpi"><b>{TT.sin}</b><span>sin actualizar</span></div>
           </div>
+          <p className="meta" style={{ fontSize: 12 }}>Viendo: {descTodo}.</p>
           <p className="meta">Aprobación: fecha de aprobación del listado; si falta, ronda de asignación de «Asignaciones 2026». Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones.</p>
         </>}
         {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
@@ -3200,7 +3235,7 @@ function SeguimientoInner() {
               )}
               <div className="actions" style={{ marginTop: 10 }}>
                 <button type="button" className="btn" onClick={() => setCdRegion(null)}>Cerrar listado</button>
-                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); setEtp(""); window.scrollTo(0, 0); }}>Ir a actualizar los proyectos de la región</button>
+                <button type="button" className="btn" onClick={() => { setDrill(cdRegion); setFlt("all"); setLim(25); setQ(""); setCom(""); setEtp(""); setPrg(""); window.scrollTo(0, 0); }}>Ir a actualizar los proyectos de la región</button>
               </div>
             </div>
           );
@@ -3245,7 +3280,7 @@ function SeguimientoInner() {
     act.forEach(x => { cnt[x.est]++; });
     const comunas = [...new Set(todas.map(x => x.p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
     const ql = q.trim().toLowerCase();
-    const filtrados = base.filter(x => (!com || x.p.comuna === com) && (!etp || (x.cur && x.cur.etapa === etp)) &&
+    const filtrados = base.filter(x => (!com || x.p.comuna === com) && segCumpleProg(x.p, prg) && (!etp || (x.cur && x.cur.etapa === etp)) &&
       (flt === "all" || flt === "ret" || (flt === "nocode" ? !x.p.codigo : x.est === flt)) &&
       (!ql || `${x.p.nombre} ${x.p.comuna} ${x.p.codigo || ""}`.toLowerCase().includes(ql)));
     const chips = [["all", "Todos"], ["ok", "Actualizados"], ["vie", "Desactualizados"], ["sin", "Sin actualizar"], ["ret", `Retirados (${todas.filter(x => !x.activo).length})`], ["nocode", "Sin código"]];
@@ -3275,6 +3310,10 @@ function SeguimientoInner() {
           <select aria-label="Comuna" value={com} onChange={e => { setCom(e.target.value); setLim(25); }}>
             <option value="">Todas las comunas</option>
             {comunas.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select aria-label="Programa" value={prg} onChange={e => { setPrg(e.target.value); setLim(25); }}>
+            <option value="">Todos los programas</option>
+            {SEG_GRUPOS_PROG.map(g => <option key={g} value={g}>{g}</option>)}
           </select>
           <select aria-label="Estado" value={etp} onChange={e => { setEtp(e.target.value); setLim(25); }}>
             <option value="">Todos los estados</option>

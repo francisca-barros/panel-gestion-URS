@@ -2820,8 +2820,9 @@ function SeguimientoInner() {
   const [etp, setEtp] = useState("");
   const [lim, setLim] = useState(25);
   const [hoja, setHoja] = useState(null);
-  const [soloCD, setSoloCD] = useState(false);
-  const [cdTodos, setCdTodos] = useState(false); // Chile Despega: asignados y por asignar (incluye «por aprobar»)
+  const [cdModo, setCdModo] = useState(null); // null = todos los proyectos | "todos" (asignados y por asignar, incluye «por aprobar») | "asignados" | "transferidos"
+  const [cdMenu, setCdMenu] = useState(false);
+  const soloCD = cdModo !== null, cdTodos = cdModo === "todos";
   const [fAprob, setFAprob] = useState("todas"); // todas | post | pre | nd
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
   const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
@@ -2978,7 +2979,9 @@ function SeguimientoInner() {
     // La tabla «por etapa» puede filtrarse a Chile Despega; los números de arriba no
     const porT = {};
     SEG_ORDEN.forEach(id => { porT[id] = { t: 0, sin: 0, pa: 0, m: 0, mSin: 0, mPa: 0, mEt: {}, et: {} }; });
-    const baseT = cdTodos && esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : activos.filter(x => !soloCD || x.p.chile_despega);
+    const baseT = cdModo === "todos" && esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)]
+      : cdModo === "transferidos" ? activos.filter(x => x.p.chile_despega && segGrupoTransf(x.p) === "con")
+      : activos.filter(x => !soloCD || x.p.chile_despega);
     const okAp = (x, ap) => ap === "todas" || segGrupoAprob(x.p) === ap;
     const okTr = (x, tr) => tr === "todas" || segGrupoTransf(x.p) === tr;
     const claveCom = (x) => x.p.region_id + "|" + x.p.comuna;
@@ -2990,14 +2993,23 @@ function SeguimientoInner() {
     const hayComuna = fCom && fCom.includes("|"); const nomCom = hayComuna ? fCom.slice(fCom.indexOf("|") + 1) : "";
     const monto = (x) => Number(x.p.monto_subdere) || 0;
     const mm = (n) => "$" + (n / 1e6).toLocaleString("es-CL", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M"; // millones de pesos
-    const cuenta = (fn) => { const l = baseT.filter(fn); return `${l.length} · ${mm(l.reduce((a, x) => a + monto(x), 0))}`; };
     for (const x of tablaItems) { const b = porT[x.p.region_id]; if (!b) continue; const m = monto(x); b.t++; b.m += m; if (x.p.solo_resumen) { b.pa++; b.mPa += m; continue; } if (x.est === "sin") { b.sin++; b.mSin += m; } if (x.cur) { b.et[x.cur.etapa] = (b.et[x.cur.etapa] || 0) + 1; b.mEt[x.cur.etapa] = (b.mEt[x.cur.etapa] || 0) + m; } }
     const TT = { t: 0, sin: 0, pa: 0, m: 0, mSin: 0, mPa: 0 };
     SEG_ORDEN.forEach(id => { const b = porT[id]; TT.t += b.t; TT.sin += b.sin; TT.pa += b.pa; TT.m += b.m; TT.mSin += b.mSin; TT.mPa += b.mPa; });
     const vTot = (b) => (verMonto ? mm(b.m) : b.t), vSin = (b) => (verMonto ? mm(b.mSin) : b.sin), vPa = (b) => (verMonto ? mm(b.mPa) : b.pa), vEt = (b, id) => (verMonto ? mm(b.mEt[id] || 0) : (b.et[id] || 0));
-    const totEt = (id) => SEG_ORDEN.reduce((a, r) => a + (verMonto ? (porT[r].mEt[id] || 0) : (porT[r].et[id] || 0)), 0);
+    const totEtN = (id) => SEG_ORDEN.reduce((a, r) => a + (porT[r].et[id] || 0), 0), totEtM = (id) => SEG_ORDEN.reduce((a, r) => a + (porT[r].mEt[id] || 0), 0);
+    const totEt = (id) => (verMonto ? totEtM(id) : totEtN(id));
+    // Resumen ejecutivo de lo que se está viendo (según los filtros)
+    const sumM = (l) => l.reduce((a, x) => a + monto(x), 0);
+    const gr = (fn) => { const l = tablaItems.filter(fn); return `${l.length} (${mm(sumM(l))})`; };
+    const conT = tablaItems.filter(x => segGrupoTransf(x.p) === "con");
+    const transfTotal = conT.reduce((a, x) => a + (Number(x.p.transf_ano_actual) || 0), 0);
+    const regsOrd = SEG_ORDEN.filter(id => porT[id].t > 0).sort((a, b) => porT[b].m - porT[a].m);
+    const etapasRes = [...(TT.pa ? [`Por aprobar ${TT.pa} (${mm(TT.mPa)})`] : []), ...(TT.sin ? [`Sin actualizar ${TT.sin} (${mm(TT.mSin)})`] : []), ...SEG_ETAPAS.filter(e => totEtN(e.id) > 0).map(e => `${e.n} ${totEtN(e.id)} (${mm(totEtM(e.id))})`)];
     const hayFiltro = fAprob !== "todas" || fTransf !== "todas";
-    const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "con transferencia este año" : fTransf === "sin" ? "sin transferencia este año" : fTransf === "nd" ? "sin dato de transferencia" : null].filter(Boolean).join(" · ");
+    const CD_ETQ = { todos: "todos (asignados y por asignar)", asignados: "ya asignados", transferidos: "ya transferidos" };
+    const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "transferidos este año" : fTransf === "sin" ? "no transferidos este año" : null].filter(Boolean).join(" · ");
+    const descTodo = [cdModo ? "Chile Despega: " + CD_ETQ[cdModo] : "todos los proyectos", descFiltro, hayComuna ? "comuna de " + nomCom : null].filter(Boolean).join(" · ");
     const nSR = itemsSR.filter(x => x.p.chile_despega).length;
     return (
       <>
@@ -3008,11 +3020,11 @@ function SeguimientoInner() {
           <div className="kpi"><b>{T.sin}</b><span>sin actualizar (nunca anotados)</span></div>
         </div>
         <div className="actions" style={{ marginBottom: 18 }}>
-          <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>Cargar proyectos desde Excel</button>
-          <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>Agregar un proyecto a mano</button>
-          <button type="button" className="btn" onClick={() => descargar(SEG_ORDEN, "proyectos_seguimiento_todas_las_regiones")}>Descargar Excel (todas las regiones)</button>
+          <button type="button" className="btn main" onClick={() => setHoja({ tipo: "carga" })}>＋ Cargar desde Excel</button>
+          <button type="button" className="btn" onClick={() => setHoja({ tipo: "agregar" })}>＋ Agregar a mano</button>
+          <button type="button" className="btn" title="Descarga un Excel con los proyectos de todas las regiones" onClick={() => descargar(SEG_ORDEN, "proyectos_seguimiento_todas_las_regiones")}>⤓ Descargar Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "limpieza" })}>Limpiar con Resumen financiero</button>
-          {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Ver retirados ({retirados.length})</button>}
+          {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Retirados ({retirados.length})</button>}
         </div>
         <h2>Avance de actualización por región</h2>
         <p className="meta">Toca una región para ver sus proyectos.</p>
@@ -3024,27 +3036,32 @@ function SeguimientoInner() {
               <b>{pc}%</b>
             </div>); })}
         </div>
-        <h2>Proyectos por etapa de seguimiento{cdTodos && esGab ? " · Chile Despega (todos)" : soloCD ? " · solo Chile Despega" : ""}</h2>
-        <div className="chips" role="group" aria-label="Proyectos por etapa">
-          <button type="button" className="chip" aria-pressed={!soloCD && !cdTodos} onClick={() => { setSoloCD(false); setCdTodos(false); setCdRegion(null); }}>Todos los proyectos</button>
-          <button type="button" className="chip" aria-pressed={soloCD && !cdTodos} onClick={() => { setSoloCD(true); setCdTodos(false); setCdRegion(null); }}>Proyectos Chile Despega ({nCD})</button>
-          {esGab && <button type="button" className="chip" aria-pressed={cdTodos} onClick={() => { setSoloCD(true); setCdTodos(true); setCdRegion(null); }}>Chile Despega: todos los asignados y por asignar ({nCD + nSR})</button>}
+        <h2>Proyectos por etapa de seguimiento{soloCD ? " · Chile Despega" : ""}</h2>
+        <div className="chips" role="group" aria-label="Proyectos por etapa" style={{ alignItems: "center" }}>
+          <button type="button" className="chip" aria-pressed={!soloCD} onClick={() => { setCdModo(null); setCdMenu(false); setCdRegion(null); }}>Todos los proyectos</button>
+          <span style={{ position: "relative" }}>
+            <button type="button" className="chip" aria-pressed={soloCD} aria-haspopup="menu" aria-expanded={cdMenu} onClick={() => setCdMenu(m => !m)}>{cdModo ? "Chile Despega: " + { todos: "todos", asignados: "ya asignados", transferidos: "ya transferidos" }[cdModo] : "Chile Despega"} ▾</button>
+            {cdMenu && <div role="menu" aria-label="Qué proyectos Chile Despega ver" style={{ position: "absolute", zIndex: 20, top: "100%", left: 0, marginTop: 4, background: "var(--bg)", border: "2px solid var(--primary)", borderRadius: 8, padding: 6, display: "flex", flexDirection: "column", gap: 4, minWidth: 290 }}>
+              {[...(esGab ? [["todos", "Todos (asignados y por asignar)"]] : []), ["asignados", "Solo los ya asignados"], ["transferidos", "Solo los ya transferidos"]].map(([k, t]) => (
+                <button key={k} type="button" role="menuitem" className="btn" style={{ textAlign: "left", background: cdModo === k ? "var(--panel)" : undefined }} onClick={() => { setCdModo(k); setCdMenu(false); setCdRegion(null); }}>{t}</button>
+              ))}
+            </div>}
+          </span>
           {esGab && <button type="button" className="btn sm" onClick={() => setHoja({ tipo: "cd" })}>Marcar proyectos Chile Despega</button>}
         </div>
         {esGab && <>
-          <div className="chips" role="group" aria-label="Filtrar por aprobación">
-            <b style={{ alignSelf: "center" }}>Aprobación:</b>
+          <div className="chips" role="group" aria-label="Filtrar por aprobación" style={{ alignItems: "center" }}>
+            <b>Aprobación:</b>
             <button type="button" className="chip" aria-pressed={fAprob === "todas"} onClick={() => { setFAprob("todas"); setCdRegion(null); }}>Todas</button>
-            <button type="button" className="chip" aria-pressed={fAprob === "post"} onClick={() => { setFAprob("post"); setCdRegion(null); }}>Desde el 11-03-2026 ({cuenta(x => okTr(x, fTransf) && segGrupoAprob(x.p) === "post")})</button>
-            <button type="button" className="chip" aria-pressed={fAprob === "pre"} onClick={() => { setFAprob("pre"); setCdRegion(null); }}>Antes del 11-03-2026 ({cuenta(x => okTr(x, fTransf) && segGrupoAprob(x.p) === "pre")})</button>
-            <button type="button" className="chip" aria-pressed={fAprob === "nd"} onClick={() => { setFAprob("nd"); setCdRegion(null); }}>Sin fecha ni ronda ({cuenta(x => okTr(x, fTransf) && segGrupoAprob(x.p) === "nd")})</button>
+            <button type="button" className="chip" aria-pressed={fAprob === "post"} onClick={() => { setFAprob("post"); setCdRegion(null); }}>Desde el 11-03-2026</button>
+            <button type="button" className="chip" aria-pressed={fAprob === "pre"} onClick={() => { setFAprob("pre"); setCdRegion(null); }}>Antes del 11-03-2026</button>
+            <button type="button" className="chip" aria-pressed={fAprob === "nd"} onClick={() => { setFAprob("nd"); setCdRegion(null); }}>Sin fecha ni ronda</button>
           </div>
-          <div className="chips" role="group" aria-label="Filtrar por transferencia este año">
-            <b style={{ alignSelf: "center" }}>Transferencia este año:</b>
+          <div className="chips" role="group" aria-label="Filtrar por transferencia este año" style={{ alignItems: "center" }}>
+            <b>Transferencia este año:</b>
             <button type="button" className="chip" aria-pressed={fTransf === "todas"} onClick={() => { setFTransf("todas"); setCdRegion(null); }}>Todas</button>
-            <button type="button" className="chip" aria-pressed={fTransf === "con"} onClick={() => { setFTransf("con"); setCdRegion(null); }}>Con transferencia ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "con")})</button>
-            <button type="button" className="chip" aria-pressed={fTransf === "sin"} onClick={() => { setFTransf("sin"); setCdRegion(null); }}>Sin transferencia ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "sin")})</button>
-            <button type="button" className="chip" aria-pressed={fTransf === "nd"} onClick={() => { setFTransf("nd"); setCdRegion(null); }}>Sin dato ({cuenta(x => okAp(x, fAprob) && segGrupoTransf(x.p) === "nd")})</button>
+            <button type="button" className="chip" aria-pressed={fTransf === "con"} onClick={() => { setFTransf("con"); setCdRegion(null); }}>Transferidos</button>
+            <button type="button" className="chip" aria-pressed={fTransf === "sin"} onClick={() => { setFTransf("sin"); setCdRegion(null); }}>No transferidos</button>
           </div>
           <div className="chips" role="group" aria-label="Filtrar por comuna">
             <label htmlFor="seg-fcom" style={{ alignSelf: "center", fontWeight: 700 }}>Comuna:</label>
@@ -3058,7 +3075,15 @@ function SeguimientoInner() {
             </select>
             {fCom && <button type="button" className="btn sm" onClick={() => setFCom("")}>Quitar filtro de comuna</button>}
           </div>
-          <p className="meta">Aprobación: según la fecha de aprobación del listado; si falta, según la ronda de asignación de «Asignaciones 2026» («Anterior al 11mar2026» = antes). Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones; «Sin dato» = aún no cargado (se carga con «Limpiar con Resumen financiero»).{(hayFiltro || hayComuna) && <> <b>Mostrando: {[descFiltro, hayComuna ? "comuna de " + nomCom : null].filter(Boolean).join(" · ")}.</b></>} <b>Total mostrado: {TT.t} proyectos · {mm(TT.m)}.</b></p>
+          <div className="note" id="seg-res-ejec" aria-live="polite">
+            <p><b>Resumen ejecutivo</b> · {descTodo}</p>
+            <p><b>{TT.t} {TT.t === 1 ? "proyecto" : "proyectos"} · {mm(TT.m)}</b> de monto SUBDERE, en {regsOrd.length} {regsOrd.length === 1 ? "región" : "regiones"}.</p>
+            <p>Aprobación: desde el 11-03-2026 {gr(x => segGrupoAprob(x.p) === "post")} · antes {gr(x => segGrupoAprob(x.p) === "pre")} · sin fecha ni ronda {gr(x => segGrupoAprob(x.p) === "nd")}.</p>
+            <p>Transferencia este año: transferidos {gr(x => segGrupoTransf(x.p) === "con")}, con {mm(transfTotal)} transferidos en el año · no transferidos {gr(x => segGrupoTransf(x.p) === "sin")} · sin dato {gr(x => segGrupoTransf(x.p) === "nd")} (el «sin dato» no entra en ninguno de los dos botones).</p>
+            <p>Por etapa: {etapasRes.join(" · ") || "—"}.</p>
+            {regsOrd.length > 0 && <p>Mayores regiones por monto: {regsOrd.slice(0, 3).map(id => `${labelReg(id)} ${porT[id].t} (${mm(porT[id].m)})`).join(" · ")}.</p>}
+          </div>
+          <p className="meta">Aprobación: fecha de aprobación del listado; si falta, ronda de asignación de «Asignaciones 2026». Transferencia: lo transferido este año según el Resumen financiero o la hoja de Asignaciones.</p>
         </>}
         {soloCD && nCD === 0 && <p className="meta">Todavía no hay proyectos marcados como Chile Despega.{esGab ? " Usa «Marcar proyectos Chile Despega»." : ""}</p>}
         <div className="chips" role="group" aria-label="Qué mostrar en la tabla">

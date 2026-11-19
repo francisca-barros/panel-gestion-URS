@@ -1860,6 +1860,10 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .btn.main:hover{filter: brightness(1.12);}
 .seg .btn.go{background: var(--ok); border-color: var(--ok); color: #FFFFFF;}
 .seg .btn.sm{min-height: 40px; padding: 6px 12px; font-size: 14px;}
+.seg .sem td, .seg .sem th{text-align:center; padding:6px 8px;}
+.seg .sem td.sem-n{text-align:left; font-weight:700;}
+.seg .sem .sem-e{background:#8fd9a8; color:#063d1c;} .seg .sem .sem-v{background:#c9efd5; color:#0b5a2a;} .seg .sem .sem-a{background:#fff0b3; color:#7a5b00;} .seg .sem .sem-r{background:#f9cdd0; color:#8a1520;}
+.seg .sem tr.sem-tot td{border-top:3px solid var(--primary); font-weight:800;}
 .seg .chips{display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px;}
 .seg .chip{border: 2px solid var(--line); background: var(--bg); border-radius: 22px; padding: 8px 14px; min-height: 44px; cursor: pointer;}
 .seg .chip[aria-pressed="true"]{background: var(--primary); border-color: var(--primary); color: var(--onprimary);}
@@ -2054,6 +2058,9 @@ function segGrupoTransf(p) {
   if (p.transf_ano_actual == null) return "nd";
   return Number(p.transf_ano_actual) > 0 ? "con" : "sin";
 }
+// Semáforo Chile Despega: puntaje ponderado y tramos de color (de 30% en 30%, último tramo desde 90%)
+const SEG_SEM_PESOS = { lic: 0.2, adj: 0.3, ob: 0.5 };
+function segTramo(v) { return v >= 90 ? ["e", "★"] : v >= 60 ? ["v", "✔"] : v >= 30 ? ["a", "▲"] : ["r", "✖"]; }
 const SEG_MOTIVO_LIMPIEZA = "Limpieza masiva: aprobado antes del 11-03-2026, sin transferencia este año y 100% transferido";
 function segFechaISO(v) {
   if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() + 12 * 3600 * 1000).toISOString().slice(0, 10);
@@ -2825,6 +2832,7 @@ function SeguimientoInner() {
   const soloCD = cdModo !== null, cdTodos = cdModo === "todos";
   const [fAprob, setFAprob] = useState("todas"); // todas | post | pre | nd
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
+  const [verSem, setVerSem] = useState(false); // semáforo Chile Despega (solo gabinete)
   const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
   const [verMonto, setVerMonto] = useState(false); // tabla por etapa: cantidad de proyectos o monto SUBDERE
   const [cdRegion, setCdRegion] = useState(null); // región abierta dentro de «Proyectos por etapa»
@@ -3011,6 +3019,20 @@ function SeguimientoInner() {
     const descFiltro = [fAprob === "post" ? "aprobados desde el 11-03-2026" : fAprob === "pre" ? "aprobados antes del 11-03-2026" : fAprob === "nd" ? "sin fecha de aprobación ni ronda" : null, fTransf === "con" ? "transferidos este año" : fTransf === "sin" ? "no transferidos este año" : null].filter(Boolean).join(" · ");
     const descTodo = [cdModo ? "Chile Despega: " + CD_ETQ[cdModo] : "todos los proyectos", descFiltro, hayComuna ? "comuna de " + nomCom : null].filter(Boolean).join(" · ");
     const nSR = itemsSR.filter(x => x.p.chile_despega).length;
+    // Semáforo Chile Despega: se recalcula en vivo con lo que hay en el panel (todos los Chile Despega, incluidos los «por aprobar»)
+    const baseS = esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : [];
+    const semR = {};
+    SEG_ORDEN.forEach(id => { semR[id] = { id, n: 0, m: 0, lic: 0, adj: 0, ob: 0, pa: 0, sa: 0, tdat: 0, mtr: 0 }; });
+    for (const x of baseS) {
+      const r = semR[x.p.region_id]; if (!r) continue;
+      r.n++; r.m += monto(x);
+      if (x.p.solo_resumen) r.pa++;
+      else { if (x.est === "sin") r.sa++; const k = x.cur ? SEG_ETAPA_IDX[x.cur.etapa] : -1; if (k >= 1) r.lic++; if (k >= 2) r.adj++; if (k >= 4) r.ob++; }
+      if (x.p.transf_ano_actual != null) { r.tdat++; r.mtr += Math.max(0, Number(x.p.transf_ano_actual) || 0); }
+    }
+    const semFin = (r) => { const pc = (v) => (r.n ? 100 * v / r.n : 0); const o = { ...r, plic: pc(r.lic), padj: pc(r.adj), pob: pc(r.ob), ptr: r.m ? 100 * r.mtr / r.m : 0 }; o.score = SEG_SEM_PESOS.lic * o.plic + SEG_SEM_PESOS.adj * o.padj + SEG_SEM_PESOS.ob * o.pob; return o; };
+    const semRows = SEG_ORDEN.map(id => semR[id]).filter(r => r.n > 0).map(semFin).sort((a, b) => b.score - a.score || b.n - a.n);
+    const semTot = semFin(semRows.reduce((t, r) => { for (const k of ["n", "m", "lic", "adj", "ob", "pa", "sa", "tdat", "mtr"]) t[k] += r[k]; return t; }, { n: 0, m: 0, lic: 0, adj: 0, ob: 0, pa: 0, sa: 0, tdat: 0, mtr: 0 }));
     return (
       <>
         <div className="kpis">
@@ -3025,7 +3047,27 @@ function SeguimientoInner() {
           <button type="button" className="btn" title="Descarga un Excel con los proyectos de todas las regiones" onClick={() => descargar(SEG_ORDEN, "proyectos_seguimiento_todas_las_regiones")}>⤓ Descargar Excel</button>
           <button type="button" className="btn" onClick={() => setHoja({ tipo: "limpieza" })}>Limpiar con Resumen financiero</button>
           {retirados.length > 0 && <button type="button" className="btn" onClick={() => { setDrill("__ret"); setFlt("ret"); }}>Retirados ({retirados.length})</button>}
+          {esGab && <button type="button" className="btn" aria-pressed={verSem} onClick={() => setVerSem(v => !v)}>{verSem ? "Ocultar semáforo" : "Semáforo Chile Despega"}</button>}
         </div>
+        {esGab && verSem && <div id="seg-semaforo" style={{ marginBottom: 22 }}>
+          <h2>Semáforo Chile Despega · avance por región</h2>
+          <p className="meta">Se calcula en vivo con lo que registran las URS (hoy {new Date().toLocaleDateString("es-CL")}, {new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}). Mide sobre todos los proyectos marcados Chile Despega, incluidos los «por aprobar», que cuentan sin avance. Puntaje = {Math.round(SEG_SEM_PESOS.lic * 100)}% licitado + {Math.round(SEG_SEM_PESOS.adj * 100)}% adjudicado + {Math.round(SEG_SEM_PESOS.ob * 100)}% obras iniciadas.</p>
+          {semRows.length === 0 ? <div className="empty">Todavía no hay proyectos marcados como Chile Despega.</div> : (
+            <div className="tw"><table className="sem">
+              <thead><tr><th>#</th><th style={{ textAlign: "left" }}>Región</th><th>Proyectos CD</th><th>Por aprobar</th><th>Monto SUBDERE</th><th>Licitado o más</th><th>Adjudicado o más</th><th>Obras iniciadas</th><th>Monto transferido</th><th>Puntaje</th><th>Actualización</th></tr></thead>
+              <tbody>
+                {[...semRows.map((r, i) => ({ r, pos: i + 1 })), { r: semTot, pos: "", tot: true }].map(({ r, pos, tot }) => (
+                  <tr key={tot ? "tot" : r.id} className={tot ? "sem-tot" : ""}>
+                    <td>{pos}</td><td className="sem-n">{tot ? "TOTAL PAÍS" : labelReg(r.id)}</td><td>{r.n}</td><td>{r.pa}</td><td>{mm(r.m)}</td>
+                    {[r.plic, r.padj, r.pob].map((v, k) => { const [c, ic] = segTramo(v); return <td key={k} className={"sem-" + c}><b>{ic} {Math.round(v)}%</b></td>; })}
+                    {(() => { const [c, ic] = segTramo(r.ptr); return <td className={"sem-" + c}><b>{ic} {Math.round(r.ptr)}%</b><br /><small>{mm(r.mtr)}{r.tdat < r.n ? ` · dato de ${r.tdat} de ${r.n}` : ""}</small></td>; })()}
+                    <td className={"sem-" + segTramo(r.score)[0]}><b>{r.score.toFixed(1)}</b></td>
+                    <td>{r.sa > 0 ? <b style={{ color: "#8a1520" }}>⚠ {r.sa} sin actualizar</b> : "al día"}</td>
+                  </tr>))}
+              </tbody>
+            </table></div>)}
+          <p className="meta">✖ rojo: menos de 30% · ▲ amarillo: 30% a 59% · ✔ verde: 60% a 89% · ★ verde oscuro: 90% o más. «Monto transferido» usa solo los proyectos con dato; se completa al cargar los Resumen financieros.</p>
+        </div>}
         <h2>Avance de actualización por región</h2>
         <p className="meta">Toca una región para ver sus proyectos.</p>
         <div className="bars">

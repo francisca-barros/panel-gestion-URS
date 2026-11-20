@@ -1862,9 +1862,11 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .btn.go{background: var(--ok); border-color: var(--ok); color: #FFFFFF;}
 .seg .btn.sm{min-height: 40px; padding: 6px 12px; font-size: 14px;}
 .seg .kpis.mini .kpi{padding: 8px 12px;} .seg .kpis.mini .kpi b{font-size: 22px;} .seg .kpis.mini .kpi span{font-size: 11px; line-height: 1.25;}
+.seg .tw.sem-tw{max-height: 80vh; overflow: auto;} .seg .sem thead th{position: sticky; top: 0; z-index: 3; box-shadow: 0 2px 0 var(--line);} .seg .sem thead th:first-child{z-index: 4;} .seg .sem td small{font-weight: 400; display: block;} .seg .sem td.sem-n button{font-weight: 700; text-align: left;}
 .seg .sem{font-size: 14px; width: 100%;} .seg .sem td, .seg .sem th{text-align:center; padding:6px 6px;}
 @media (max-width: 1250px){.seg .sem{font-size: 12px;} .seg .sem td, .seg .sem th{padding: 4px 3px;} .seg .sem th{font-size: 11px; line-height: 1.2;} .seg .sem small{display: block;}}
 .seg .sem td.sem-n{text-align:left; font-weight:700;}
+@media (max-width: 1000px){.seg .sem{font-size: 11px;} .seg .sem td, .seg .sem th{padding: 3px 2px;} .seg .sem th{font-size: 10px;}}
 .seg .sem .sem-e{background:#8fd9a8; color:#063d1c;} .seg .sem .sem-v{background:#c9efd5; color:#0b5a2a;} .seg .sem .sem-a{background:#fff0b3; color:#7a5b00;} .seg .sem .sem-r{background:#f9cdd0; color:#8a1520;}
 .seg .sem tr.sem-tot td{border-top:3px solid var(--primary); font-weight:800;}
 .seg .chips{display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px;}
@@ -2751,6 +2753,38 @@ function HojaDetalle({ ctx, it }) {
   );
 }
 
+// Registro de licitación de un grupo de proyectos (se abre con doble clic en «Licitado» del semáforo o en «En licitación» de las tablas)
+function HojaLics({ ctx, items, titulo }) {
+  const [abierto, setAbierto] = useState(null);
+  const lista = items.slice().sort((a, b) => (a.p.comuna || "").localeCompare(b.p.comuna || "", "es") || (a.p.nombre || "").localeCompare(b.p.nombre || "", "es"));
+  const nLic = lista.reduce((a, x) => a + x.lic.length, 0);
+  return (
+    <Hoja titulo={titulo} onClose={() => ctx.setHoja(null)}>
+      <h2>{titulo}</h2>
+      <p className="meta">{lista.length} proyecto{lista.length === 1 ? "" : "s"} · {nLic} proceso{nLic === 1 ? "" : "s"} de licitación registrado{nLic === 1 ? "" : "s"} por las URS. Toca un proyecto para ver su registro.</p>
+      <p className="meta"><b>Documentos:</b> el panel todavía no permite que las URS adjunten archivos. Lo que hay registrado es el código de la licitación (nota de la etapa), la publicación, la apertura de ofertas, el resultado y las notas.</p>
+      {lista.length === 0 && <p className="meta">No hay proyectos en esta selección.</p>}
+      {lista.map(x => {
+        const ab = abierto === x.p.id; const e = x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]] : null;
+        return (
+          <div key={x.p.id} className="dsec">
+            <button type="button" className="dtit" aria-expanded={ab} onClick={() => setAbierto(ab ? null : x.p.id)}>{ab ? "▼" : "▶"} {x.p.comuna} · {x.p.nombre} <span className="tag">{e ? e.n : "Sin actualizar"}</span></button>
+            {ab && <div className="dbody">
+              <p className="meta">{x.p.programa}{x.p.codigo ? " · Código " + x.p.codigo : ""} · {segClp(x.p.monto_subdere)}</p>
+              {x.cur && <p className="meta">Etapa actual: <b>{e ? e.n : x.cur.etapa}</b> desde {fmtFecha(x.cur.fecha)}{x.cur.autor ? ` (${x.cur.autor})` : ""}{x.cur.nota ? ` · Nota: ${x.cur.nota}` : ""}</p>}
+              {x.lic.length === 0 ? <p className="meta">Sin procesos de licitación anotados en el detalle.</p> : (
+                <ul className="detlista">{x.lic.map(r => (
+                  <li key={r.id}><b>Proceso N° {r.numero}</b>: publicación {fmtFecha(r.fecha_publicacion)}{r.fecha_apertura ? `, apertura ${fmtFecha(r.fecha_apertura)}` : ""} — {SEG_RESULTADO[r.resultado] || r.resultado}{r.nota ? ` (${r.nota})` : ""}</li>
+                ))}</ul>)}
+              <div className="actions"><button type="button" className="btn" onClick={() => ctx.setHoja({ tipo: "detalle", id: x.p.id })}>Abrir el detalle completo del proyecto</button></div>
+            </div>}
+          </div>);
+      })}
+      <div className="actions"><button type="button" className="btn main" onClick={() => ctx.setHoja(null)}>Cerrar</button></div>
+    </Hoja>
+  );
+}
+
 // Marcar proyectos "Chile Despega" pegando una lista de códigos (solo gabinete)
 // Descarga a Excel de los proyectos en seguimiento (una hoja por región), con columnas vacías para que el equipo anote.
 async function segDescargarExcel(items, regionesIds, labelReg, nombreBase) {
@@ -2852,6 +2886,8 @@ function SeguimientoInner() {
   const [fProg, setFProg] = useState(""); // filtro por programa del resumen
   const [prg, setPrg] = useState(""); // filtro por programa de la vista de región
   const [semTanda, setSemTanda] = useState("todas"); // todas | 1 | 2
+  const [semReg, setSemReg] = useState(""); // región del semáforo por comuna
+  const [semOrd, setSemOrd] = useState({ col: "ob", dir: "desc" }); // orden de los semáforos
   const [verSem, setVerSem] = useState(false); // semáforo Chile Despega (solo gabinete)
   const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
   const [verMonto, setVerMonto] = useState(false); // tabla por etapa: cantidad de proyectos o monto SUBDERE
@@ -3044,18 +3080,74 @@ function SeguimientoInner() {
     const baseS0 = esGab ? [...activos.filter(x => x.p.chile_despega), ...itemsSR.filter(x => x.p.chile_despega)] : [];
     const nTanda = { "1": 0, "2": 0, "0": 0 }; baseS0.forEach(x => { nTanda[tandaDe(x.p)]++; });
     const baseS = semTanda === "todas" ? baseS0 : baseS0.filter(x => tandaDe(x.p) === semTanda);
-    const semR = {};
-    SEG_ORDEN.forEach(id => { semR[id] = { id, n: 0, m: 0, lic: 0, adj: 0, ob: 0, pa: 0, sa: 0, tdat: 0, mtr: 0 }; });
-    for (const x of baseS) {
-      const r = semR[x.p.region_id]; if (!r) continue;
-      r.n++; r.m += monto(x);
-      if (x.p.solo_resumen) r.pa++;
-      else { if (x.est === "sin") r.sa++; const k = x.cur ? SEG_ETAPA_IDX[x.cur.etapa] : -1; if (k >= 1) r.lic++; if (k >= 2) r.adj++; if (k >= 4) r.ob++; }
-      if (x.p.transf_ano_actual != null) { r.tdat++; r.mtr += Math.max(0, Number(x.p.transf_ano_actual) || 0); }
-    }
-    const semFin = (r) => { const pc = (v) => (r.n ? 100 * v / r.n : 0); const o = { ...r, plic: pc(r.lic), padj: pc(r.adj), pob: pc(r.ob), ptr: r.m ? 100 * r.mtr / r.m : 0 }; o.score = SEG_SEM_PESOS.lic * o.plic + SEG_SEM_PESOS.adj * o.padj + SEG_SEM_PESOS.ob * o.pob; return o; };
-    const semRows = SEG_ORDEN.map(id => semR[id]).filter(r => r.n > 0).map(semFin).sort((a, b) => b.score - a.score || b.n - a.n);
-    const semTot = semFin(semRows.reduce((t, r) => { for (const k of ["n", "m", "lic", "adj", "ob", "pa", "sa", "tdat", "mtr"]) t[k] += r[k]; return t; }, { n: 0, m: 0, lic: 0, adj: 0, ob: 0, pa: 0, sa: 0, tdat: 0, mtr: 0 }));
+    const semR0 = new Set(baseS0.map(x => x.p.region_id));
+    // En resolución = ya seleccionados por nosotros pero aún sin aprobación en el sistema (Asignado, En Resolución, En Oficio)
+    const enRes = (p) => /^(asignado|en resolucion|en oficio)/.test(segNorm(p.estado_subdere || ""));
+    const nuevoAcc = () => ({ n: 0, m: 0, pa: 0, mpa: 0, rs: 0, mrs: 0, tr: 0, mtr: 0, ba: 0, mba: 0, lic: 0, mlic: 0, adj: 0, madj: 0, ob: 0, mob: 0, sa: 0, idsLic: [] });
+    const semAcum = (r, x) => {
+      const m = monto(x), p = x.p;
+      r.n++; r.m += m;
+      if (p.solo_resumen) { r.pa++; r.mpa += m; } else if (x.est === "sin") r.sa++;
+      if (enRes(p)) { r.rs++; r.mrs += m; }
+      const k = (!p.solo_resumen && x.cur) ? SEG_ETAPA_IDX[x.cur.etapa] : -1;
+      const t = Math.max(0, Number(p.transf_ano_actual) || 0);
+      if (t > 0) { r.tr++; r.mtr += t; }
+      if (k >= 0) { r.ba++; r.mba += m; } // marcados por las URS en «preparación de bases» o en una etapa posterior
+      if (k >= 1) { r.lic++; r.mlic += m; r.idsLic.push(p.id); }
+      if (k >= 2) { r.adj++; r.madj += m; }
+      if (k >= 4) { r.ob++; r.mob += m; }
+    };
+    const semFin = (r) => { const pc = (v) => (r.m ? 100 * v / r.m : 0); return { ...r, ppa: pc(r.mpa), prs: pc(r.mrs), ptr: pc(r.mtr), pba: pc(r.mba), plic: pc(r.mlic), padj: pc(r.madj), pob: pc(r.mob) }; };
+    const semAgrupar = (lista, keyFn, initFn) => { const g = {}; for (const x of lista) { const k = keyFn(x); if (!k) continue; if (!g[k]) g[k] = { key: k, ...initFn(x), ...nuevoAcc() }; semAcum(g[k], x); } return Object.values(g).map(semFin); };
+    const semTotal = (lista) => semFin(lista.reduce((t, x) => { semAcum(t, x); return t; }, nuevoAcc()));
+    const SEM_VAL = { nom: (r) => r.nom, n: (r) => r.n, pa: (r) => r.ppa, rs: (r) => r.prs, tr: (r) => r.ptr, ba: (r) => r.pba, lic: (r) => r.plic, adj: (r) => r.padj, ob: (r) => r.pob };
+    const semOrdenar = (rows) => rows.slice().sort((a, b) => {
+      const f = SEM_VAL[semOrd.col] || SEM_VAL.ob; const va = f(a), vb = f(b);
+      let c = typeof va === "string" ? va.localeCompare(vb, "es") : va - vb; if (semOrd.dir === "desc") c = -c;
+      return c || (b.pob - a.pob) || (b.padj - a.padj) || (b.plic - a.plic) || (b.n - a.n) || String(a.nom).localeCompare(String(b.nom), "es");
+    });
+    const semRows = semOrdenar(semAgrupar(baseS, x => x.p.region_id, x => ({ reg: x.p.region_id, nom: labelReg(x.p.region_id) })));
+    const semTot = semTotal(baseS.filter(x => SEG_ORDEN.includes(x.p.region_id)));
+    const baseC = semReg ? baseS.filter(x => x.p.region_id === semReg) : baseS;
+    const semComRows = semOrdenar(semAgrupar(baseC, x => x.p.comuna ? x.p.region_id + "|" + x.p.comuna : null, x => ({ reg: x.p.region_id, nom: x.p.comuna })));
+    const semComTot = semTotal(baseC);
+    const abrirLics = (ids, nombre) => setHoja({ tipo: "lics", ids, titulo: "Licitaciones · " + nombre });
+    const idsEnLic = (fn) => tablaItems.filter(x => !x.p.solo_resumen && x.cur && x.cur.etapa === "licitacion" && fn(x)).map(x => x.p.id);
+    const SemTh = ({ col, children, title }) => (
+      <th title={title} aria-sort={semOrd.col === col ? (semOrd.dir === "asc" ? "ascending" : "descending") : "none"} style={col === "nom" ? { textAlign: "left" } : undefined}>
+        <button type="button" onClick={() => setSemOrd(o => o.col === col ? { col, dir: o.dir === "asc" ? "desc" : "asc" } : { col, dir: col === "nom" ? "asc" : "desc" })} style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 700 }}>
+          {children}<span style={{ opacity: semOrd.col === col ? 1 : 0.45, fontSize: 10 }}>{semOrd.col === col ? (semOrd.dir === "asc" ? "▲" : "▼") : "⇅"}</span>
+        </button>
+      </th>);
+    const celSem = (n, m, pct, color, extra) => { const [c, ic] = segTramo(pct); return (
+      <td className={color ? "sem-" + c : ""} {...extra}><b>{n}</b><br /><small>{mm(m)} · {color ? ic + " " : ""}{Math.round(pct)}%</small></td>); };
+    const semFilas = (rows, tot, conRegion, nomTot) => [...rows.map((r, i) => ({ r, pos: i + 1 })), { r: tot, pos: "", tot: true }].map(({ r, pos, tot: esTot }) => (
+      <tr key={esTot ? "tot" : r.key} className={esTot ? "sem-tot" : ""}>
+        <td>{pos}</td>
+        <td className="sem-n">{esTot ? nomTot : conRegion
+          ? <button type="button" title="Ver las comunas de esta región" onClick={() => { setSemReg(r.reg); setTimeout(() => { const el = document.getElementById("seg-sem-comunas"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>{r.nom}</button>
+          : <>{r.nom}{!semReg && <small style={{ display: "block", fontWeight: 400 }}>{labelReg(r.reg)}</small>}</>}</td>
+        <td><b>{r.n}</b><br /><small>{mm(r.m)}</small></td>
+        <td><b>{r.pa}</b><br /><small>{mm(r.mpa)} · {Math.round(r.ppa)}%</small></td>
+        <td><b>{r.rs}</b><br /><small>{mm(r.mrs)} · {Math.round(r.prs)}%</small></td>
+        {celSem(r.tr, r.mtr, r.ptr, true)}
+        {celSem(r.ba, r.mba, r.pba, true)}
+        {celSem(r.lic, r.mlic, r.plic, true, { onDoubleClick: () => abrirLics(r.idsLic, esTot ? "todos los proyectos de esta vista" : r.nom), title: "Doble clic: ver el registro de licitación de estos proyectos", style: { cursor: "pointer" } })}
+        {celSem(r.adj, r.madj, r.padj, true)}
+        {celSem(r.ob, r.mob, r.pob, true)}
+        <td>{r.sa > 0 ? <b style={{ color: "#8a1520" }} title={r.sa + " sin actualizar"}>⚠ {r.sa}</b> : "al día"}</td>
+      </tr>));
+    const semCabecera = (colNom, nomTit) => (
+      <thead><tr><th>#</th><SemTh col="nom" title={nomTit}>{colNom}</SemTh>
+        <SemTh col="n" title="Proyectos seleccionados y su monto SUBDERE">Proyectos</SemTh>
+        <SemTh col="pa" title="Aún sin aprobación en el sistema: cuentan sin avance. % = monto sobre el monto total">Por aprobar</SemTh>
+        <SemTh col="rs" title="Ya seleccionados por nosotros pero aún sin aprobación en el sistema: estados Asignado, En Resolución o En Oficio">En resolución</SemTh>
+        <SemTh col="tr" title="Proyectos con monto transferido este año; el monto es lo transferido">Transferido</SemTh>
+        <SemTh col="ba" title="Marcados por las URS en preparación de bases o en una etapa más avanzada">Prep. bases</SemTh>
+        <SemTh col="lic" title="Licitado o más avanzado. Doble clic en una celda para ver el registro de licitación">Licitado</SemTh>
+        <SemTh col="adj" title="Adjudicado o más avanzado">Adjudicado</SemTh>
+        <SemTh col="ob" title="Obras iniciadas">Obras iniciadas</SemTh>
+        <th title="Proyectos sin actualizar">Act.</th></tr></thead>);
     return (
       <>
         <div className="kpis">
@@ -3081,22 +3173,27 @@ function SeguimientoInner() {
             {[["todas", "Ambas tandas"], ["1", "1ª tanda"], ["2", "2ª tanda"]].map(([k, l]) => <button key={k} type="button" className="chip" aria-pressed={semTanda === k} onClick={() => setSemTanda(k)}>{l}</button>)}
           </div>
           {semTanda === "todas" && nTanda["0"] > 0 && <p className="meta">{nTanda["0"]} proyecto{nTanda["0"] === 1 ? "" : "s"} Chile Despega sin tanda identificada (solo se cuentan en «Ambas tandas»).</p>}
-          <p className="meta">Se calcula en vivo con lo que registran las URS (hoy {new Date().toLocaleDateString("es-CL")}, {new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}). Mide sobre todos los proyectos marcados Chile Despega, incluidos los «por aprobar», que cuentan sin avance. Puntaje = {Math.round(SEG_SEM_PESOS.lic * 100)}% licitado + {Math.round(SEG_SEM_PESOS.adj * 100)}% adjudicado + {Math.round(SEG_SEM_PESOS.ob * 100)}% obras iniciadas.</p>
+          <p className="meta">Se calcula en vivo con lo que registran las URS (hoy {new Date().toLocaleDateString("es-CL")}, {new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}). Cada celda muestra el N° de proyectos y, abajo, el monto y el % del monto total. Haz clic en un encabezado para ordenar (por defecto, obras iniciadas). Doble clic en «Licitado» abre el registro de licitación.</p>
           {semRows.length === 0 ? <div className="empty">Todavía no hay proyectos marcados como Chile Despega.</div> : (
-            <div className="tw"><table className="sem">
-              <thead><tr><th>#</th><th style={{ textAlign: "left" }}>Región</th><th title="Proyectos Chile Despega">Proy. CD</th><th title="Aún sin aprobación: cuentan sin avance">Por aprobar</th><th title="Monto SUBDERE">Monto</th><th title="Licitado o más avanzado">Licitado+</th><th title="Adjudicado o más avanzado">Adjudicado+</th><th title="Obras iniciadas">Obras</th><th title="Monto transferido este año">Transferido</th><th title="Puntaje ponderado">Puntaje</th><th title="Proyectos sin actualizar">Act.</th></tr></thead>
-              <tbody>
-                {[...semRows.map((r, i) => ({ r, pos: i + 1 })), { r: semTot, pos: "", tot: true }].map(({ r, pos, tot }) => (
-                  <tr key={tot ? "tot" : r.id} className={tot ? "sem-tot" : ""}>
-                    <td>{pos}</td><td className="sem-n">{tot ? "TOTAL PAÍS" : labelReg(r.id)}</td><td>{r.n}</td><td>{r.pa}</td><td>{mm(r.m)}</td>
-                    {[r.plic, r.padj, r.pob].map((v, k) => { const [c, ic] = segTramo(v); return <td key={k} className={"sem-" + c}><b>{ic} {Math.round(v)}%</b></td>; })}
-                    {(() => { const [c, ic] = segTramo(r.ptr); return <td className={"sem-" + c}><b>{ic} {Math.round(r.ptr)}%</b><br /><small>{mm(r.mtr)}{r.tdat < r.n ? ` (dato ${r.tdat}/${r.n})` : ""}</small></td>; })()}
-                    <td className={"sem-" + segTramo(r.score)[0]}><b>{r.score.toFixed(1)}</b></td>
-                    <td>{r.sa > 0 ? <b style={{ color: "#8a1520" }} title={r.sa + " sin actualizar"}>⚠ {r.sa}</b> : "al día"}</td>
-                  </tr>))}
-              </tbody>
+            <div className="tw sem-tw"><table className="sem">
+              {semCabecera("Región", "Región")}
+              <tbody>{semFilas(semRows, semTot, true, "TOTAL PAÍS")}</tbody>
             </table></div>)}
-          <p className="meta">✖ rojo: menos de 30% · ▲ amarillo: 30% a 59% · ✔ verde: 60% a 89% · ★ verde oscuro: 90% o más. «Monto transferido» usa solo los proyectos con dato; se completa al cargar los Resumen financieros.</p>
+          <p className="meta">✖ rojo: menos de 30% · ▲ amarillo: 30% a 59% · ✔ verde: 60% a 89% · ★ verde oscuro: 90% o más (sobre el monto). Las fases son acumuladas: «Licitado» incluye lo adjudicado y lo que ya tiene obras. «Transferido» muestra el monto transferido este año; un proyecto sin dato de transferencia cuenta como no transferido. «Por aprobar» y «En resolución» no son fases de avance.</p>
+          <h2 id="seg-sem-comunas" style={{ marginTop: 22 }}>Semáforo por comuna{semReg ? " · Región de " + labelReg(semReg) : ""}</h2>
+          <div className="chips" role="group" aria-label="Región del semáforo por comuna" style={{ alignItems: "center" }}>
+            <label htmlFor="seg-semreg" style={{ fontWeight: 700 }}>Región:</label>
+            <select id="seg-semreg" value={semReg} onChange={e => setSemReg(e.target.value)}>
+              <option value="">Todas las regiones</option>
+              {SEG_ORDEN.filter(id => semR0.has(id)).map(id => <option key={id} value={id}>{labelReg(id)}</option>)}
+            </select>
+            <span className="meta">{semComRows.length} comuna{semComRows.length === 1 ? "" : "s"}</span>
+          </div>
+          {semComRows.length === 0 ? <div className="empty">No hay proyectos Chile Despega en esta selección.</div> : (
+            <div className="tw sem-tw"><table className="sem">
+              {semCabecera("Comuna", "Comuna")}
+              <tbody>{semFilas(semComRows, semComTot, false, semReg ? "TOTAL " + labelReg(semReg).toUpperCase() : "TOTAL")}</tbody>
+            </table></div>)}
         </div>}
         <h2>Avance de actualización por región</h2>
         <p className="meta">Toca una región para ver sus proyectos.</p>
@@ -3184,7 +3281,7 @@ function SeguimientoInner() {
             {SEG_ORDEN.map(id => { const b = porT[id]; return (
               <tr key={id} data-drill="1" aria-selected={cdRegion === id} style={cdRegion === id ? { boxShadow: "inset 0 -2px 0 var(--secondary)", background: "var(--panel)" } : undefined}
                 onClick={() => { if (fCom && !fCom.startsWith(id + "|")) setFCom(""); setCdRegion(cdRegion === id ? null : id); setTimeout(() => { const el = document.getElementById("seg-cd-lista"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80); }}>
-                <td><button type="button">{labelReg(id)}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{vEt(b, e.id)}</td>)}
+                <td><button type="button">{labelReg(id)}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id} {...(e.id === "licitacion" ? { onDoubleClick: () => abrirLics(idsEnLic(x => x.p.region_id === id), labelReg(id)), title: "Doble clic: ver el registro de licitación" } : {})}>{vEt(b, e.id)}</td>)}
               </tr>); })}
             <tr><td><b>Total</b></td><td><b>{vTot(TT)}</b></td><td><b>{vSin(TT)}</b></td>{cdTodos && esGab && <td><b>{vPa(TT)}</b></td>}{SEG_ETAPAS.map(e => <td key={e.id}><b>{verMonto ? mm(totEt(e.id)) : totEt(e.id)}</b></td>)}</tr>
           </tbody>
@@ -3213,7 +3310,7 @@ function SeguimientoInner() {
                   <tbody>
                     {comRows.map(c => { const b = cr[c]; return (
                       <tr key={c} data-drill="1" aria-selected={fCom === cdRegion + "|" + c} onClick={() => setFCom(fCom === cdRegion + "|" + c ? "" : cdRegion + "|" + c)}>
-                        <td><button type="button">{c}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id}>{vEt(b, e.id)}</td>)}
+                        <td><button type="button">{c}</button></td><td>{vTot(b)}</td><td>{vSin(b)}</td>{cdTodos && esGab && <td>{vPa(b)}</td>}{SEG_ETAPAS.map(e => <td key={e.id} {...(e.id === "licitacion" ? { onDoubleClick: () => abrirLics(idsEnLic(x => x.p.region_id === cdRegion && x.p.comuna === c), c), title: "Doble clic: ver el registro de licitación" } : {})}>{vEt(b, e.id)}</td>)}
                       </tr>); })}
                   </tbody>
                 </table></div>
@@ -3366,6 +3463,7 @@ function SeguimientoInner() {
       {hoja && hoja.tipo === "carga" && <HojaCarga ctx={ctx} />}
       {hoja && hoja.tipo === "detalle" && hojaItem && <HojaDetalle ctx={ctx} it={hojaItem} />}
       {hoja && hoja.tipo === "cd" && <HojaCD ctx={ctx} />}
+      {hoja && hoja.tipo === "lics" && <HojaLics ctx={ctx} titulo={hoja.titulo} items={items.filter(x => (hoja.ids || []).includes(x.p.id))} />}
       {toast && (
         <div className="toast"><span>{toast.msg}</span>
           {toast.undo && <button type="button" onClick={() => { const u = toast.undo; setToast(null); u(); }}>Deshacer</button>}</div>

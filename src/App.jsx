@@ -1723,6 +1723,8 @@ const segDias = (iso) => Math.max(0, Math.round((new Date(segHoy()) - new Date(i
 const segClp = (n) => (n ? "$" + Number(n).toLocaleString("es-CL") : "Monto: sin dato");
 const segNorm = (s) => String(s == null ? "" : s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ").trim();
 // "ALTO DEL CARMEN" / "Alto Del Carmen" -> "Alto del Carmen"
+// Las 346 comunas de Chile por región (para mostrar también las que no tienen proyectos)
+const SEG_COMUNAS = {"arica-y-parinacota": ["ARICA", "CAMARONES", "GENERAL LAGOS", "PUTRE"], "tarapaca": ["ALTO HOSPICIO", "CAMIÑA", "COLCHANE", "HUARA", "IQUIQUE", "PICA", "POZO ALMONTE"], "antofagasta": ["ANTOFAGASTA", "CALAMA", "MARÍA ELENA", "MEJILLONES", "OLLAGÜE", "SAN PEDRO DE ATACAMA", "SIERRA GORDA", "TALTAL", "TOCOPILLA"], "atacama": ["ALTO DEL CARMEN", "CALDERA", "CHAÑARAL", "COPIAPÓ", "DIEGO DE ALMAGRO", "FREIRINA", "HUASCO", "TIERRA AMARILLA", "VALLENAR"], "coquimbo": ["ANDACOLLO", "CANELA", "COMBARBALÁ", "COQUIMBO", "ILLAPEL", "LA HIGUERA", "LA SERENA", "LOS VILOS", "MONTE PATRIA", "OVALLE", "PAIGUANO", "PUNITAQUI", "RÍO HURTADO", "SALAMANCA", "VICUÑA"], "valparaiso": ["ALGARROBO", "CABILDO", "CALERA", "CALLE LARGA", "CARTAGENA", "CASABLANCA", "CATEMU", "CONCÓN", "EL QUISCO", "EL TABO", "HIJUELAS", "ISLA DE PASCUA", "JUAN FERNÁNDEZ", "LA CRUZ", "LA LIGUA", "LIMACHE", "LLAILLAY", "LOS ANDES", "NOGALES", "OLMUÉ", "PANQUEHUE", "PAPUDO", "PETORCA", "PUCHUNCAVÍ", "PUTAENDO", "QUILLOTA", "QUILPUÉ", "QUINTERO", "RINCONADA", "SAN ANTONIO", "SAN ESTEBAN", "SAN FELIPE", "SANTA MARÍA", "SANTO DOMINGO", "VALPARAÍSO", "VILLA ALEMANA", "VIÑA DEL MAR", "ZAPALLAR"], "metropolitana": ["ALHUÉ", "BUIN", "CALERA DE TANGO", "CERRILLOS", "CERRO NAVIA", "COLINA", "CONCHALÍ", "CURACAVÍ", "EL BOSQUE", "EL MONTE", "ESTACIÓN CENTRAL", "HUECHURABA", "INDEPENDENCIA", "ISLA DE MAIPO", "LA CISTERNA", "LA FLORIDA", "LA GRANJA", "LA PINTANA", "LA REINA", "LAMPA", "LAS CONDES", "LO BARNECHEA", "LO ESPEJO", "LO PRADO", "MACUL", "MAIPÚ", "MARÍA PINTO", "MELIPILLA", "PADRE HURTADO", "PAINE", "PEDRO AGUIRRE CERDA", "PEÑAFLOR", "PEÑALOLÉN", "PIRQUE", "PROVIDENCIA", "PUDAHUEL", "PUENTE ALTO", "QUILICURA", "QUINTA NORMAL", "RECOLETA", "RENCA", "SAN BERNARDO", "SAN JOAQUÍN", "SAN JOSÉ DE MAIPO", "SAN MIGUEL", "SAN PEDRO", "SAN RAMÓN", "SANTIAGO", "TALAGANTE", "TILTIL", "VITACURA", "ÑUÑOA"], "ohiggins": ["CHIMBARONGO", "CHÉPICA", "CODEGUA", "COINCO", "COLTAUCO", "DOÑIHUE", "GRANEROS", "LA ESTRELLA", "LAS CABRAS", "LITUECHE", "LOLOL", "MACHALÍ", "MALLOA", "MARCHIHUE", "MOSTAZAL", "NANCAGUA", "NAVIDAD", "OLIVAR", "PALMILLA", "PAREDONES", "PERALILLO", "PEUMO", "PICHIDEGUA", "PICHILEMU", "PLACILLA", "PUMANQUE", "QUINTA DE TILCOCO", "RANCAGUA", "RENGO", "REQUINOA", "SAN FERNANDO", "SAN VICENTE", "SANTA CRUZ"], "maule": ["CAUQUENES", "CHANCO", "COLBÚN", "CONSTITUCIÓN", "CUREPTO", "CURICÓ", "EMPEDRADO", "HUALAÑÉ", "LICANTÉN", "LINARES", "LONGAVÍ", "MAULE", "MOLINA", "PARRAL", "PELARCO", "PELLUHUE", "PENCAHUE", "RAUCO", "RETIRO", "ROMERAL", "RÍO CLARO", "SAGRADA FAMILIA", "SAN CLEMENTE", "SAN JAVIER", "SAN RAFAEL", "TALCA", "TENO", "VICHUQUÉN", "VILLA ALEGRE", "YERBAS BUENAS"], "nuble": ["BULNES", "CHILLÁN", "CHILLÁN VIEJO", "COBQUECURA", "COELEMU", "COIHUECO", "EL CARMEN", "NINHUE", "PEMUCO", "PINTO", "PORTEZUELO", "QUILLÓN", "QUIRIHUE", "RÁNQUIL", "SAN CARLOS", "SAN FABIÁN", "SAN IGNACIO", "SAN NICOLÁS", "TREGUACO", "YUNGAY", "ÑIQUÉN"], "biobio": ["ALTO BIOBÍO", "ANTUCO", "ARAUCO", "CABRERO", "CAÑETE", "CHIGUAYANTE", "CONCEPCIÓN", "CONTULMO", "CORONEL", "CURANILAHUE", "FLORIDA", "HUALPÉN", "HUALQUI", "LAJA", "LEBU", "LOS ÁLAMOS", "LOS ÁNGELES", "LOTA", "MULCHÉN", "NACIMIENTO", "NEGRETE", "PENCO", "QUILACO", "QUILLECO", "SAN PEDRO DE LA PAZ", "SAN ROSENDO", "SANTA BÁRBARA", "SANTA JUANA", "TALCAHUANO", "TIRÚA", "TOMÉ", "TUCAPEL", "YUMBEL"], "araucania": ["ANGOL", "CARAHUE", "CHOLCHOL", "COLLIPULLI", "CUNCO", "CURACAUTÍN", "CURARREHUE", "ERCILLA", "FREIRE", "GALVARINO", "GORBEA", "LAUTARO", "LONCOCHE", "LONQUIMAY", "LOS SAUCES", "LUMACO", "MELIPEUCO", "NUEVA IMPERIAL", "PADRE LAS CASAS", "PERQUENCO", "PITRUFQUÉN", "PUCÓN", "PURÉN", "RENAICO", "SAAVEDRA", "TEMUCO", "TEODORO SCHMIDT", "TOLTÉN", "TRAIGUÉN", "VICTORIA", "VILCÚN", "VILLARRICA"], "los-rios": ["CORRAL", "FUTRONO", "LA UNIÓN", "LAGO RANCO", "LANCO", "LOS LAGOS", "MARIQUINA", "MÁFIL", "PAILLACO", "PANGUIPULLI", "RÍO BUENO", "VALDIVIA"], "los-lagos": ["ANCUD", "CALBUCO", "CASTRO", "CHAITÉN", "CHONCHI", "COCHAMÓ", "CURACO DE VÉLEZ", "DALCAHUE", "FRESIA", "FRUTILLAR", "FUTALEUFÚ", "HUALAIHUÉ", "LLANQUIHUE", "LOS MUERMOS", "MAULLÍN", "OSORNO", "PALENA", "PUERTO MONTT", "PUERTO OCTAY", "PUERTO VARAS", "PUQUELDÓN", "PURRANQUE", "PUYEHUE", "QUEILÉN", "QUELLÓN", "QUEMCHI", "QUINCHAO", "RÍO NEGRO", "SAN JUAN DE LA COSTA", "SAN PABLO"], "aysen": ["AISÉN", "CHILE CHICO", "CISNES", "COCHRANE", "COIHAIQUE", "GUAITECAS", "LAGO VERDE", "O´HIGGINS", "RÍO IBÁÑEZ", "TORTEL"], "magallanes": ["ANTÁRTICA", "CABO DE HORNOS", "LAGUNA BLANCA", "NATALES", "PORVENIR", "PRIMAVERA", "PUNTA ARENAS", "RÍO VERDE", "SAN GREGORIO", "TIMAUKEL", "TORRES DEL PAINE"]};
 const segTitulo = (s) => String(s == null ? "" : s).trim().toLowerCase().split(/\s+/).map((w, i) => {
   if (i > 0 && ["de", "del", "la", "las", "los", "y", "el"].includes(w)) return w;
   return w.replace(/(^|['\-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
@@ -1798,7 +1800,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
   }
   if (hi < 0) return { error: "No reconozco las columnas. El archivo debe traer al menos: Región, Comuna, Programa y Nombre Proyecto (como el listado de SUBDERE en línea)." };
   const get = (f, r) => (col[f] == null ? "" : String(r[col[f]] == null ? "" : r[col[f]]).replace(/\s+/g, " ").trim());
-  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, reintegrar: [], promover: [], cdSoloRes: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
+  const st = { leidas: 0, fueraAlcance: 0, otraRegion: 0, yaExistian: 0, reintegrar: [], promover: [], existentes: [], cdSoloRes: 0, cdNuevos: 0, cdGirado: 0, catGirado: 0, g26: 0, sinEstado: col.estado == null };
   const recs = [], rechazos = [], vistos = new Set();
   for (let i = hi + 1; i < matriz.length; i++) {
     const r = matriz[i];
@@ -1817,7 +1819,7 @@ function segAnalizar(matriz, { regionPermitida, codigosExistentes, autor, codigo
     if (!rid) { rech("región no reconocida"); continue; }
     if (regionPermitida && rid !== regionPermitida) { st.otraRegion++; continue; }
     if (!codigo) { rech("sin código (agrégalo a mano para evitar duplicados)"); continue; }
-    if (codigosExistentes.has(codigo)) { if (codigosRetirados.has(codigo)) st.reintegrar.push(codigo); else if (codigosSoloRes.has(codigo) && !soloRes) st.promover.push({ codigo, estado: get("estado", r), fecha: col.faprob != null ? segFechaISO(get("faprob", r)) : null }); else st.yaExistian++; continue; }
+    if (codigosExistentes.has(codigo)) { if (codigosRetirados.has(codigo)) st.reintegrar.push(codigo); else if (codigosSoloRes.has(codigo) && !soloRes) st.promover.push({ codigo, estado: get("estado", r), fecha: col.faprob != null ? segFechaISO(get("faprob", r)) : null }); else { st.yaExistian++; st.existentes.push({ codigo, estado: col.estado != null ? get("estado", r) : null, fecha: col.faprob != null ? segFechaISO(get("faprob", r)) : null }); } continue; }
     if (vistos.has(codigo)) { rech("código repetido dentro del archivo"); continue; }
     const comuna = segTitulo(get("comuna", r)), programa = get("programa", r);
     if (!comuna || !nombre || !programa) { rech("faltan datos (comuna, programa o nombre)"); continue; }
@@ -1865,7 +1867,7 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .tw.sem-alto{max-height: 80vh; overflow: auto;} .seg .sem tr.sem-tot td{position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -3px 0 var(--primary);} .seg .sem tr.sem-tot td:not(.sem-e):not(.sem-v):not(.sem-a):not(.sem-r){background: var(--bg);} .seg .sem tr.sem-tot td:first-child{z-index: 3;} .seg .sem thead th{position: sticky; top: 0; z-index: 3; box-shadow: 0 2px 0 var(--line);} .seg .sem thead th:first-child{z-index: 4;} .seg .sem td small{font-weight: 400; display: block;} .seg .sem td.sem-n button{font-weight: 700; text-align: left;}
 .seg .sem{font-size: 14px; width: 100%;} .seg .sem td, .seg .sem th{text-align:center; padding:6px 6px;}
 @media (max-width: 1250px){.seg .sem{font-size: 12px;} .seg .sem td, .seg .sem th{padding: 4px 3px;} .seg .sem th{font-size: 11px; line-height: 1.2;} .seg .sem small{display: block;}}
-.seg .sem td.sem-n{text-align:left; font-weight:700;}
+.seg .sem td.sem-n{text-align:left; font-weight:700;} .seg .sem tr.sem-sd td{font-size: 12px; padding-block: 4px;}
 @media (max-width: 1000px){.seg .sem{font-size: 11px;} .seg .sem td, .seg .sem th{padding: 3px 2px;} .seg .sem th{font-size: 10px;}}
 .seg .sem .sem-e{background:#8fd9a8; color:#063d1c;} .seg .sem .sem-v{background:#c9efd5; color:#0b5a2a;} .seg .sem .sem-a{background:#fff0b3; color:#7a5b00;} .seg .sem .sem-r{background:#f9cdd0; color:#8a1520;}
 .seg .sem tr.sem-tot td{border-top:3px solid var(--primary); font-weight:800;}
@@ -2356,6 +2358,8 @@ function HojaCarga({ ctx }) {
     const [err, setErr] = useState("");
     const [nGuardados, setNGuardados] = useState(0);
     const [cdTxt, setCdTxt] = useState("");
+    const [soloAct, setSoloAct] = useState(!!esGab); // gabinete: por defecto solo actualiza lo que ya está en el panel
+    const [cdAgregar, setCdAgregar] = useState(false);
     async function leer(file) {
       if (!file) return;
       setFase("leyendo"); setErr("");
@@ -2370,18 +2374,30 @@ function HojaCarga({ ctx }) {
         r.promover = r.stats.promover.map(x => ({ ...x, id: idSR.get(x.codigo) })).filter(x => x.id);
         r.marcar = datos.pr.filter(p => p.codigo && codigosCD.has(p.codigo) && !p.chile_despega).map(p => p.id); // ya cargados que se marcarán Chile Despega
         r.nCD = codigosCD.size;
+        const porCod = new Map(datos.pr.filter(p => p.codigo).map(p => [p.codigo, p]));
+        r.actualizar = [];
+        for (const x of r.stats.existentes) {
+          const p = porCod.get(x.codigo); if (!p || !p.activo) continue;
+          const patch = {};
+          if (x.estado && x.estado !== (p.estado_subdere || "")) patch.estado_subdere = x.estado;
+          if (x.fecha && x.fecha !== String(p.fecha_aprobacion || "").slice(0, 10)) patch.fecha_aprobacion = x.fecha;
+          if (Object.keys(patch).length) r.actualizar.push({ id: p.id, patch });
+        }
         setRes(r); setFase("resumen");
       } catch (e) { setErr("No pude leer el archivo: " + (e.message || e) + ". Guárdalo como .xlsx o .csv y vuelve a intentar."); setFase("elegir"); }
     }
+    const recsG = res ? res.recs.filter(r => !soloAct || (cdAgregar && r.chile_despega)) : [];
+    const nAct = res && res.actualizar ? res.actualizar.length : 0;
     async function guardar() {
       setFase("guardando"); setErr("");
       try {
         const LOTE = 300;
         let n = 0;
-        for (let i = 0; i < res.recs.length; i += LOTE) {
-          await fetcher.insertMany("seg_proyectos", res.recs.slice(i, i + LOTE));
-          n += Math.min(LOTE, res.recs.length - i); setNGuardados(n);
+        for (let i = 0; i < recsG.length; i += LOTE) {
+          await fetcher.insertMany("seg_proyectos", recsG.slice(i, i + LOTE));
+          n += Math.min(LOTE, recsG.length - i); setNGuardados(n);
         }
+        for (const x of (res.actualizar || [])) await fetcher.updateRow("seg_proyectos", x.id, x.patch);
         const rein = res.reintegrar || [];
         for (let i = 0; i < rein.length; i += 150) {
           const lote = rein.slice(i, i + 150);
@@ -2398,7 +2414,7 @@ function HojaCarga({ ctx }) {
       <Hoja titulo="Cargar proyectos desde Excel" onClose={() => setHoja(null)}>
         <h2>Cargar proyectos desde Excel</h2>
         {fase === "elegir" && <>
-          <p className="meta">Sirve el listado de SUBDERE en línea (.xls), un .xlsx o un .csv. {esGab ? "Se aceptan todas las regiones." : `Solo se aceptan proyectos de la región de ${labelReg(as)}.`} Solo entran proyectos desde Aprobado en adelante; los códigos que ya existen se omiten.</p>
+          <p className="meta">Sirve el listado de SUBDERE en línea (.xls), un .xlsx o un .csv. {esGab ? "Se aceptan todas las regiones." : `Solo se aceptan proyectos de la región de ${labelReg(as)}.`} Solo entran proyectos desde Aprobado en adelante. {esGab ? "Por defecto solo se actualizan los que ya están en el panel; puedes cambiarlo al ver el resumen." : "Los códigos que ya existen se omiten."}</p>
           {esGab && <div className="fld"><label htmlFor="seg-cdl">Lista Chile Despega (opcional)</label>
             <textarea id="seg-cdl" style={{ minHeight: 90 }} value={cdTxt} onChange={e => setCdTxt(e.target.value)} placeholder="Pega aquí los códigos Chile Despega, uno por línea" />
             <p className="meta">Los proyectos de esta lista entran aunque estén en «100% Girado» o aún sin aprobar (estos últimos solo se ven en el resumen de gabinete y las URS no los ven), quedan marcados como Chile Despega y los que ya estaban cargados también se marcan. Pega la lista ANTES de elegir el archivo.</p></div>}
@@ -2406,10 +2422,17 @@ function HojaCarga({ ctx }) {
         </>}
         {fase === "leyendo" && <p>Leyendo el archivo… puede tardar unos segundos.</p>}
         {(fase === "resumen" || fase === "guardando") && st && <>
+          {esGab && <div className="fld" style={{ marginBottom: 8 }}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 700 }}><input type="checkbox" checked={soloAct} onChange={e => setSoloAct(e.target.checked)} /> Solo actualizar los proyectos que ya están en el panel (no agregar nuevos)</label>
+            {soloAct && res.nCD > 0 && <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}><input type="checkbox" checked={cdAgregar} onChange={e => setCdAgregar(e.target.checked)} /> Agregar también los de la lista Chile Despega que falten en el panel ({res.recs.filter(r => r.chile_despega).length})</label>}
+            {soloAct && <p className="meta">Se actualizan el estado y la fecha de aprobación de los que ya están, y los «por aprobar» ya aprobados pasan al seguimiento de las URS. No se agrega ningún proyecto nuevo{res.nCD > 0 && !cdAgregar ? ", ni siquiera de la lista Chile Despega" : ""}.</p>}
+          </div>}
           <div className="kpis">
-            <div className="kpi"><b>{res.recs.length}</b><span>proyectos nuevos que entran</span></div>
+            <div className="kpi"><b>{recsG.length}</b><span>proyectos nuevos que entran</span></div>
+            {soloAct && res.recs.length - recsG.length > 0 && <div className="kpi"><b>{res.recs.length - recsG.length}</b><span>proyectos nuevos del archivo que NO se agregan</span></div>}
+            {nAct > 0 && <div className="kpi"><b>{nAct}</b><span>ya estaban y se actualizan (estado o fecha de aprobación)</span></div>}
             {(res.reintegrar || []).length > 0 && <div className="kpi"><b>{res.reintegrar.length}</b><span>estaban retirados y se reintegran</span></div>}
-            <div className="kpi"><b>{st.yaExistian}</b><span>ya estaban en el panel (se omiten)</span></div>
+            <div className="kpi"><b>{st.yaExistian}</b><span>ya estaban en el panel</span></div>
             {(res.promover || []).length > 0 && <div className="kpi"><b>{res.promover.length}</b><span>estaban «por aprobar» y ya se aprobaron: pasan al seguimiento de las URS</span></div>}
             <div className="kpi"><b>{res.rechazos.length}</b><span>rechazados</span></div>
           </div>
@@ -2426,12 +2449,12 @@ function HojaCarga({ ctx }) {
           </>}
           {err && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
           <div className="actions" style={{ marginTop: 12 }}>
-            {(res.recs.length > 0 || res.marcar.length > 0 || (res.reintegrar || []).length > 0 || (res.promover || []).length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${res.recs.length}` : (res.recs.length > 0 ? `Guardar ${res.recs.length} proyectos` + ((res.reintegrar || []).length > 0 ? ` y reintegrar ${res.reintegrar.length}` : "") : ((res.reintegrar || []).length > 0 ? `Reintegrar ${res.reintegrar.length} proyectos retirados` : ((res.promover || []).length > 0 ? `Actualizar ${res.promover.length} proyectos que ya fueron aprobados` : `Marcar ${res.marcar.length} como Chile Despega`)))}</button>}
+            {(recsG.length > 0 || nAct > 0 || res.marcar.length > 0 || (res.reintegrar || []).length > 0 || (res.promover || []).length > 0) && <button type="button" className="btn main" disabled={fase === "guardando"} onClick={guardar}>{fase === "guardando" ? `Guardando… ${nGuardados} de ${recsG.length}` : ("Guardar: " + [recsG.length > 0 ? `${recsG.length} nuevos` : null, nAct > 0 ? `actualizar ${nAct}` : null, (res.promover || []).length > 0 ? `${res.promover.length} pasan a aprobados` : null, (res.reintegrar || []).length > 0 ? `reintegrar ${res.reintegrar.length}` : null, res.marcar.length > 0 ? `marcar ${res.marcar.length} Chile Despega` : null].filter(Boolean).join(" · "))}</button>}
             <button type="button" className="btn" onClick={() => setHoja(null)}>Cancelar</button>
           </div>
         </>}
         {fase === "listo" && <>
-          <p><b>{res && res.recs.length === 0 && (res.reintegrar || []).length === 0 ? `Listo: se marcaron ${res.marcar.length} proyectos como Chile Despega.` : `Listo: se guardaron ${nGuardados} proyectos nuevos${(res.reintegrar || []).length > 0 ? ` y se reintegraron ${res.reintegrar.length} que estaban retirados` : ""}.`}</b></p>
+          <p><b>{`Listo: ${nGuardados} proyectos nuevos, ${nAct} actualizados, ${(res.promover || []).length} pasaron a aprobados${res.marcar.length > 0 ? `, ${res.marcar.length} marcados Chile Despega` : ""}${(res.reintegrar || []).length > 0 ? `, ${res.reintegrar.length} reintegrados` : ""}.`}</b></p>
           <div className="actions"><button type="button" className="btn main" onClick={() => setHoja(null)}>Cerrar</button></div>
         </>}
         {err && fase === "elegir" && <p className="meta" style={{ color: "var(--alert)", fontWeight: 700 }}>{err}</p>}
@@ -3102,7 +3125,7 @@ function SeguimientoInner() {
     const semFin = (r) => { const pc = (v) => (r.m ? 100 * v / r.m : 0); return { ...r, ppa: pc(r.mpa), prs: pc(r.mrs), ptr: pc(r.mtr), pba: pc(r.mba), plic: pc(r.mlic), padj: pc(r.madj), pob: pc(r.mob) }; };
     const semAgrupar = (lista, keyFn, initFn) => { const g = {}; for (const x of lista) { const k = keyFn(x); if (!k) continue; if (!g[k]) g[k] = { key: k, ...initFn(x), ...nuevoAcc() }; semAcum(g[k], x); } return Object.values(g).map(semFin); };
     const semTotal = (lista) => semFin(lista.reduce((t, x) => { semAcum(t, x); return t; }, nuevoAcc()));
-    const SEM_VAL = { nom: (r) => r.nom, n: (r) => r.n, pa: (r) => r.ppa, rs: (r) => r.prs, tr: (r) => r.ptr, ba: (r) => r.pba, lic: (r) => r.plic, adj: (r) => r.padj, ob: (r) => r.pob };
+    const SEM_VAL = { nom: (r) => r.nom, n: (r) => r.n, pa: (r) => r.ppa, tr: (r) => r.ptr, ba: (r) => r.pba, lic: (r) => r.plic, adj: (r) => r.padj, ob: (r) => r.pob };
     const semOrdenar = (rows) => rows.slice().sort((a, b) => {
       const f = SEM_VAL[semOrd.col] || SEM_VAL.ob; const va = f(a), vb = f(b);
       let c = typeof va === "string" ? va.localeCompare(vb, "es") : va - vb; if (semOrd.dir === "desc") c = -c;
@@ -3112,8 +3135,12 @@ function SeguimientoInner() {
     const semTot = semTotal(baseS.filter(x => SEG_ORDEN.includes(x.p.region_id)));
     const qC = segNorm(semQ.trim());
     const baseC = baseS.filter(x => (!semReg || x.p.region_id === semReg) && (!qC || segNorm(x.p.comuna || "").includes(qC)));
-    const comunasSem = [...new Set(baseS0.map(x => x.p.comuna).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
-    const semComRows = semOrdenar(semAgrupar(baseC, x => x.p.comuna ? x.p.region_id + "|" + x.p.comuna : null, x => ({ reg: x.p.region_id, nom: x.p.comuna })));
+    const comunasSem = [...new Set([...baseS0.map(x => x.p.comuna).filter(Boolean), ...SEG_ORDEN.flatMap(id => (SEG_COMUNAS[id] || []).map(segTitulo))])].sort((a, b) => a.localeCompare(b, "es"));
+    const semComCon = semAgrupar(baseC, x => x.p.comuna ? x.p.region_id + "|" + segNorm(x.p.comuna) : null, x => ({ reg: x.p.region_id, nom: x.p.comuna }));
+    const yaCom = new Set(semComCon.map(r => r.key));
+    const semComSin = [];
+    for (const id of SEG_ORDEN) { if (semReg && id !== semReg) continue; for (const nom0 of (SEG_COMUNAS[id] || [])) { const nom = segTitulo(nom0); if (qC && !segNorm(nom).includes(qC)) continue; const k = id + "|" + segNorm(nom); if (!yaCom.has(k)) semComSin.push({ key: k, reg: id, nom, sd: true, ...nuevoAcc() }); } }
+    const semComRows = [...semOrdenar(semComCon), ...semComSin.sort((a, b) => a.nom.localeCompare(b.nom, "es"))];
     const semComTot = semTotal(baseC);
     const abrirLics = (ids, nombre) => setHoja({ tipo: "lics", ids, titulo: "Licitaciones · " + nombre });
     const idsEnLic = (fn) => tablaItems.filter(x => !x.p.solo_resumen && x.cur && x.cur.etapa === "licitacion" && fn(x)).map(x => x.p.id);
@@ -3125,7 +3152,12 @@ function SeguimientoInner() {
       </th>);
     const celSem = (n, m, pct, color, extra) => { const [c, ic] = segTramo(pct); return (
       <td className={color ? "sem-" + c : ""} {...extra}><b>{n}</b><br /><small>{mm(m)} · {color ? ic + " " : ""}{Math.round(pct)}%</small></td>); };
-    const semFilas = (rows, tot, conRegion, nomTot) => [...rows.map((r, i) => ({ r, pos: i + 1 })), { r: tot, pos: "", tot: true }].map(({ r, pos, tot: esTot }) => (
+    const semFilas = (rows, tot, conRegion, nomTot) => [...rows.map((r, i) => ({ r, pos: r.sd ? "" : i + 1 })), { r: tot, pos: "", tot: true }].map(({ r, pos, tot: esTot }) => r.sd ? (
+      <tr key={r.key} className="sem-sd">
+        <td>{pos}</td>
+        <td className="sem-n">{r.nom}{!semReg && <small style={{ display: "block", fontWeight: 400 }}>{labelReg(r.reg)}</small>}</td>
+        <td colSpan={8} style={{ color: "var(--muted)" }}>sin dato</td>
+      </tr>) : (
       <tr key={esTot ? "tot" : r.key} className={esTot ? "sem-tot" : ""}>
         <td>{pos}</td>
         <td className="sem-n">{esTot ? nomTot : conRegion
@@ -3133,7 +3165,6 @@ function SeguimientoInner() {
           : <>{r.nom}{!semReg && <small style={{ display: "block", fontWeight: 400 }}>{labelReg(r.reg)}</small>}</>}</td>
         <td><b>{r.n}</b><br /><small>{mm(r.m)}</small></td>
         <td><b>{r.pa}</b><br /><small>{mm(r.mpa)} · {Math.round(r.ppa)}%</small></td>
-        <td><b>{r.rs}</b><br /><small>{mm(r.mrs)} · {Math.round(r.prs)}%</small></td>
         {celSem(r.tr, r.mtr, r.ptr, true)}
         {celSem(r.ba, r.mba, r.pba, true)}
         {celSem(r.lic, r.mlic, r.plic, true, { onDoubleClick: () => abrirLics(r.idsLic, esTot ? "todos los proyectos de esta vista" : r.nom), title: "Doble clic: ver el registro de licitación de estos proyectos", style: { cursor: "pointer" } })}
@@ -3144,8 +3175,7 @@ function SeguimientoInner() {
     const semCabecera = (colNom, nomTit) => (
       <thead><tr><th>#</th><SemTh col="nom" title={nomTit}>{colNom}</SemTh>
         <SemTh col="n" title="Proyectos seleccionados y su monto SUBDERE">Proyectos</SemTh>
-        <SemTh col="pa" title="Aún sin aprobación en el sistema: cuentan sin avance. % = monto sobre el monto total">Por aprobar</SemTh>
-        <SemTh col="rs" title="Ya seleccionados por nosotros pero aún sin aprobación en el sistema: estados Asignado, En Resolución o En Oficio">En resolución</SemTh>
+        <SemTh col="pa" title="Proyectos seleccionados que aún no están aprobados en el sistema (Elegible, Asignado, En Resolución, En Oficio u otro estado previo). No cuentan como avance. % = monto sobre el monto total">En trámite</SemTh>
         <SemTh col="tr" title="Proyectos con monto transferido este año; el monto es lo transferido">Transferido</SemTh>
         <SemTh col="ba" title="Marcados por las URS en preparación de bases o en una etapa más avanzada">Prep. bases</SemTh>
         <SemTh col="lic" title="Licitado o más avanzado. Doble clic en una celda para ver el registro de licitación">Licitado</SemTh>
@@ -3183,21 +3213,21 @@ function SeguimientoInner() {
               {semCabecera("Región", "Región")}
               <tbody>{semFilas(semRows, semTot, true, "TOTAL PAÍS")}</tbody>
             </table></div>)}
-          <p className="meta">✖ rojo: menos de 30% · ▲ amarillo: 30% a 59% · ✔ verde: 60% a 89% · ★ verde oscuro: 90% o más (sobre el monto). Las fases son acumuladas: «Licitado» incluye lo adjudicado y lo que ya tiene obras. «Transferido» muestra el monto transferido este año; un proyecto sin dato de transferencia cuenta como no transferido. «Por aprobar» y «En resolución» no son fases de avance.</p>
+          <p className="meta">✖ rojo: menos de 30% · ▲ amarillo: 30% a 59% · ✔ verde: 60% a 89% · ★ verde oscuro: 90% o más (sobre el monto). Las fases son acumuladas: «Licitado» incluye lo adjudicado y lo que ya tiene obras. «Transferido» muestra el monto transferido este año; un proyecto sin dato de transferencia cuenta como no transferido. «En trámite» agrupa los proyectos seleccionados que aún no están aprobados en el sistema (Elegible, Asignado, En Resolución, En Oficio u otro estado previo); no es una fase de avance.</p>
           <h2 id="seg-sem-comunas" style={{ marginTop: 22 }}>Semáforo por comuna{semReg ? " · Región de " + labelReg(semReg) : ""}</h2>
           <div className="chips" role="group" aria-label="Región del semáforo por comuna" style={{ alignItems: "center" }}>
             <label htmlFor="seg-semreg" style={{ fontWeight: 700 }}>Región:</label>
             <select id="seg-semreg" value={semReg} onChange={e => setSemReg(e.target.value)}>
               <option value="">Todas las regiones</option>
-              {SEG_ORDEN.filter(id => semR0.has(id)).map(id => <option key={id} value={id}>{labelReg(id)}</option>)}
+              {SEG_ORDEN.map(id => <option key={id} value={id}>{labelReg(id)}</option>)}
             </select>
             <label htmlFor="seg-semq" style={{ fontWeight: 700 }}>Buscar comuna:</label>
             <input id="seg-semq" type="search" list="seg-semq-lista" value={semQ} placeholder="Escribe el nombre de la comuna" onChange={e => setSemQ(e.target.value)} />
             <datalist id="seg-semq-lista">{comunasSem.map(c => <option key={c} value={c} />)}</datalist>
             {semQ && <button type="button" className="btn sm" onClick={() => setSemQ("")}>Quitar búsqueda</button>}
-            <span className="meta">{semComRows.length} comuna{semComRows.length === 1 ? "" : "s"}</span>
+            <span className="meta">{semComRows.length} comuna{semComRows.length === 1 ? "" : "s"} · {semComCon.length} con proyectos Chile Despega</span>
           </div>
-          {semComRows.length === 0 ? <div className="empty">No hay proyectos Chile Despega en esta selección.</div> : (
+          {semComRows.length === 0 ? <div className="empty">No hay comunas en esta selección.</div> : (
             <div className="tw sem-tw sem-alto"><table className="sem">
               {semCabecera("Comuna", "Comuna")}
               <tbody>{semFilas(semComRows, semComTot, false, semReg ? "TOTAL " + labelReg(semReg).toUpperCase() : "TOTAL")}</tbody>

@@ -1862,7 +1862,7 @@ const SEG_CSS = `.seg{--bg: #FFFFFF; --panel: #EDF0F5; --card: #FFFFFF; --ink: #
 .seg .btn.go{background: var(--ok); border-color: var(--ok); color: #FFFFFF;}
 .seg .btn.sm{min-height: 40px; padding: 6px 12px; font-size: 14px;}
 .seg .kpis.mini .kpi{padding: 8px 12px;} .seg .kpis.mini .kpi b{font-size: 22px;} .seg .kpis.mini .kpi span{font-size: 11px; line-height: 1.25;}
-.seg .tw.sem-tw{max-height: 80vh; overflow: auto;} .seg .sem thead th{position: sticky; top: 0; z-index: 3; box-shadow: 0 2px 0 var(--line);} .seg .sem thead th:first-child{z-index: 4;} .seg .sem td small{font-weight: 400; display: block;} .seg .sem td.sem-n button{font-weight: 700; text-align: left;}
+.seg .tw.sem-alto{max-height: 80vh; overflow: auto;} .seg .sem tr.sem-tot td{position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -3px 0 var(--primary);} .seg .sem tr.sem-tot td:not(.sem-e):not(.sem-v):not(.sem-a):not(.sem-r){background: var(--bg);} .seg .sem tr.sem-tot td:first-child{z-index: 3;} .seg .sem thead th{position: sticky; top: 0; z-index: 3; box-shadow: 0 2px 0 var(--line);} .seg .sem thead th:first-child{z-index: 4;} .seg .sem td small{font-weight: 400; display: block;} .seg .sem td.sem-n button{font-weight: 700; text-align: left;}
 .seg .sem{font-size: 14px; width: 100%;} .seg .sem td, .seg .sem th{text-align:center; padding:6px 6px;}
 @media (max-width: 1250px){.seg .sem{font-size: 12px;} .seg .sem td, .seg .sem th{padding: 4px 3px;} .seg .sem th{font-size: 11px; line-height: 1.2;} .seg .sem small{display: block;}}
 .seg .sem td.sem-n{text-align:left; font-weight:700;}
@@ -2887,6 +2887,8 @@ function SeguimientoInner() {
   const [prg, setPrg] = useState(""); // filtro por programa de la vista de región
   const [semTanda, setSemTanda] = useState("todas"); // todas | 1 | 2
   const [semReg, setSemReg] = useState(""); // región del semáforo por comuna
+  const [semQ, setSemQ] = useState(""); // búsqueda de comuna en el semáforo
+  const [notaAb, setNotaAb] = useState({}); // proyectos con las notas de las URS desplegadas
   const [semOrd, setSemOrd] = useState({ col: "ob", dir: "desc" }); // orden de los semáforos
   const [verSem, setVerSem] = useState(false); // semáforo Chile Despega (solo gabinete)
   const [fCom, setFCom] = useState(""); // filtro por comuna del resumen: "region_id|comuna"
@@ -3108,7 +3110,9 @@ function SeguimientoInner() {
     });
     const semRows = semOrdenar(semAgrupar(baseS, x => x.p.region_id, x => ({ reg: x.p.region_id, nom: labelReg(x.p.region_id) })));
     const semTot = semTotal(baseS.filter(x => SEG_ORDEN.includes(x.p.region_id)));
-    const baseC = semReg ? baseS.filter(x => x.p.region_id === semReg) : baseS;
+    const qC = segNorm(semQ.trim());
+    const baseC = baseS.filter(x => (!semReg || x.p.region_id === semReg) && (!qC || segNorm(x.p.comuna || "").includes(qC)));
+    const comunasSem = [...new Set(baseS0.map(x => x.p.comuna).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
     const semComRows = semOrdenar(semAgrupar(baseC, x => x.p.comuna ? x.p.region_id + "|" + x.p.comuna : null, x => ({ reg: x.p.region_id, nom: x.p.comuna })));
     const semComTot = semTotal(baseC);
     const abrirLics = (ids, nombre) => setHoja({ tipo: "lics", ids, titulo: "Licitaciones · " + nombre });
@@ -3187,10 +3191,14 @@ function SeguimientoInner() {
               <option value="">Todas las regiones</option>
               {SEG_ORDEN.filter(id => semR0.has(id)).map(id => <option key={id} value={id}>{labelReg(id)}</option>)}
             </select>
+            <label htmlFor="seg-semq" style={{ fontWeight: 700 }}>Buscar comuna:</label>
+            <input id="seg-semq" type="search" list="seg-semq-lista" value={semQ} placeholder="Escribe el nombre de la comuna" onChange={e => setSemQ(e.target.value)} />
+            <datalist id="seg-semq-lista">{comunasSem.map(c => <option key={c} value={c} />)}</datalist>
+            {semQ && <button type="button" className="btn sm" onClick={() => setSemQ("")}>Quitar búsqueda</button>}
             <span className="meta">{semComRows.length} comuna{semComRows.length === 1 ? "" : "s"}</span>
           </div>
           {semComRows.length === 0 ? <div className="empty">No hay proyectos Chile Despega en esta selección.</div> : (
-            <div className="tw sem-tw"><table className="sem">
+            <div className="tw sem-tw sem-alto"><table className="sem">
               {semCabecera("Comuna", "Comuna")}
               <tbody>{semFilas(semComRows, semComTot, false, semReg ? "TOTAL " + labelReg(semReg).toUpperCase() : "TOTAL")}</tbody>
             </table></div>)}
@@ -3324,14 +3332,26 @@ function SeguimientoInner() {
                       <React.Fragment key={g.comuna}>
                         <tr className="tcom-grupo"><td colSpan={6}>{g.comuna} · {g.items.length} {g.items.length > 1 ? "proyectos" : "proyecto"}</td></tr>
                         {g.items.map(x => (
-                          <tr key={x.p.id}>
+                          <React.Fragment key={x.p.id}>
+                          <tr>
                             <td>{x.p.comuna}</td>
                             <td className="tcom-nombre">{x.p.nombre}{x.p.chile_despega && !soloCD && <> <span className="tag">Chile Despega</span></>}</td>
                             <td>{x.p.programa}{SEG_LINEA[x.p.programa] && <> <span className="tag">{SEG_LINEA[x.p.programa]}</span></>}</td>
                             <td>{x.p.monto_subdere ? "$" + Number(x.p.monto_subdere).toLocaleString("es-CL") : "—"}</td>
                             <td>{x.p.codigo || "—"}</td>
-                            <td>{x.p.solo_resumen ? `Por aprobar (${x.p.estado_subdere || "sin estado"})` : (x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar")}</td>
+                            <td style={{ textAlign: "left" }}>{x.p.solo_resumen ? `Por aprobar (${x.p.estado_subdere || "sin estado"})` : (
+                              <button type="button" aria-expanded={!!notaAb[x.p.id]} title="Ver las notas y observaciones de las URS" onClick={() => setNotaAb(o => ({ ...o, [x.p.id]: !o[x.p.id] }))}>
+                                {notaAb[x.p.id] ? "▼" : "▶"} {x.cur ? SEG_ETAPAS[SEG_ETAPA_IDX[x.cur.etapa]].n : "Sin actualizar"}{(x.hist || []).some(a => !a.anulada && a.nota) ? " · con notas" : ""}
+                              </button>)}</td>
                           </tr>
+                          {notaAb[x.p.id] && !x.p.solo_resumen && <tr className="tcom-notas"><td colSpan={6} style={{ textAlign: "left", whiteSpace: "normal", background: "var(--panel)" }}>
+                            {(() => { const h = (x.hist || []).filter(a => !a.anulada); return (<>
+                              {h.length === 0 ? <p className="meta">Las URS todavía no han anotado nada en este proyecto.</p> : <ul className="detlista">{h.slice().reverse().map(a => <li key={a.id}>{textoHist(a)}</li>)}</ul>}
+                              {(x.det || []).length > 0 && <p className="meta"><b>Detalle registrado:</b> {x.det.join(" | ")}</p>}
+                              {x.lic && x.lic.length > 0 && <p className="meta"><b>Licitación:</b> {x.lic.map(r => `Proceso N° ${r.numero}: publicación ${fmtFecha(r.fecha_publicacion)}${r.fecha_apertura ? `, apertura ${fmtFecha(r.fecha_apertura)}` : ""} — ${SEG_RESULTADO[r.resultado] || r.resultado}${r.nota ? ` (${r.nota})` : ""}`).join(" | ")}</p>}
+                            </>); })()}
+                          </td></tr>}
+                          </React.Fragment>
                         ))}
                       </React.Fragment>
                     ))}

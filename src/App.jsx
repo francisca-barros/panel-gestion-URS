@@ -2908,6 +2908,7 @@ function SeguimientoInner() {
   const [fTransf, setFTransf] = useState("todas"); // todas | con | sin | nd
   const [fProg, setFProg] = useState(""); // filtro por programa del resumen
   const [prg, setPrg] = useState(""); // filtro por programa de la vista de región
+  const [cdReg, setCdReg] = useState(false); // vista de región: solo proyectos Chile Despega
   const [semTanda, setSemTanda] = useState("todas"); // todas | 1 | 2
   const [semReg, setSemReg] = useState(""); // región del semáforo por comuna
   const [semQ, setSemQ] = useState(""); // búsqueda de comuna en el semáforo
@@ -3436,7 +3437,7 @@ function SeguimientoInner() {
     act.forEach(x => { cnt[x.est]++; });
     const comunas = [...new Set(todas.map(x => x.p.comuna))].sort((a, b) => a.localeCompare(b, "es"));
     const ql = q.trim().toLowerCase();
-    const filtrados = base.filter(x => (!com || x.p.comuna === com) && segCumpleProg(x.p, prg) && (!etp || (x.cur && x.cur.etapa === etp)) &&
+    const filtrados = base.filter(x => (!com || x.p.comuna === com) && (!cdReg || x.p.chile_despega) && segCumpleProg(x.p, prg) && (!etp || (x.cur && x.cur.etapa === etp)) &&
       (flt === "all" || flt === "ret" || (flt === "nocode" ? !x.p.codigo : x.est === flt)) &&
       (!ql || `${x.p.nombre} ${x.p.comuna} ${x.p.codigo || ""}`.toLowerCase().includes(ql)));
     const chips = [["all", "Todos"], ["ok", "Actualizados"], ["vie", "Desactualizados"], ["sin", "Sin actualizar"], ["ret", `Retirados (${todas.filter(x => !x.activo).length})`], ["nocode", "Sin código"]];
@@ -3460,6 +3461,7 @@ function SeguimientoInner() {
         )}
         {region !== "__ret" && <div className="chips" role="group" aria-label="Mostrar">
           {chips.map(([k, l]) => <button key={k} type="button" className="chip" aria-pressed={flt === k} onClick={() => { setFlt(k); setLim(25); }}>{l}</button>)}
+          <button type="button" className="chip" aria-pressed={cdReg} title="Mostrar solo los proyectos de Chile Despega (se combina con los otros filtros)" onClick={() => { setCdReg(v => !v); setLim(25); }}>Chile Despega ({todas.filter(x => x.activo && x.p.chile_despega).length})</button>
         </div>}
         <div className="filters">
           <input type="search" placeholder="Buscar por nombre, comuna o código" value={q} onChange={e => { setQ(e.target.value); setLim(25); }} aria-label="Buscar" />

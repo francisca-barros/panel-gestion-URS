@@ -17,7 +17,7 @@ const GREEN_TXT = "#1F7A3D";
 const REGIONS = {
   valparaiso: {
     label: "Valparaíso",
-    jefeUrs: "Susanne Spichiguer",
+    jefeUrs: "Susanne Spichiger",
     jefeConfianza: "Seguro",
     ciclo: "Bilateral 28/07/2026 (2ª medición del ciclo)",
     primeraVez: false,
